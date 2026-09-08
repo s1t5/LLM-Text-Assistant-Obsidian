@@ -64,7 +64,9 @@ export class FreePromptModal extends Modal {
 	private editor: Editor;
 	private messages: ChatMessage[] = [];
 	private abortController: AbortController | null = null;
-	private generatedText = "";
+	// Latest assistant answer — public so the copy-button helper can set it
+	// when an older bubble is copied.
+	generatedText = "";
 
 	// UI elements (created in onOpen)
 	private chatEl!: HTMLElement;
@@ -76,6 +78,7 @@ export class FreePromptModal extends Modal {
 	private resetBtn!: HTMLButtonElement;
 	private statusEl!: HTMLElement;
 	private isModalOpen = false;
+	private boundKeydown: ((evt: KeyboardEvent) => void) | null = null;
 
 	constructor(plugin: LlmTextAssistantPlugin, editor: Editor) {
 		super(plugin.app);
@@ -146,7 +149,9 @@ export class FreePromptModal extends Modal {
 
 		// Ctrl/Cmd+C inside the chat log copies the latest assistant answer
 		// when no text is selected (mirrors the extension's chat copy UX).
-		this.registerDomEvent(document, "keydown", (evt) => {
+		// Modal does not extend Component in the public typings, so the
+		// listener is managed manually and removed in onClose.
+		this.boundKeydown = (evt: KeyboardEvent) => {
 			if (!this.isModalOpen) return;
 			if (evt.key !== "c" || !(evt.ctrlKey || evt.metaKey) || evt.shiftKey || evt.altKey) return;
 			const active = document.activeElement;
@@ -157,11 +162,16 @@ export class FreePromptModal extends Modal {
 			if (!this.generatedText.trim()) return;
 			evt.preventDefault();
 			this.copyLatest();
-		});
+		};
+		document.addEventListener("keydown", this.boundKeydown, true);
 	}
 
 	onClose() {
 		this.isModalOpen = false;
+		if (this.boundKeydown) {
+			document.removeEventListener("keydown", this.boundKeydown, true);
+			this.boundKeydown = null;
+		}
 		this.stopStreaming();
 	}
 

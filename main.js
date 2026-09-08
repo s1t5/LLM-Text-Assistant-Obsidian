@@ -63,6 +63,8 @@ var messages = {
     chatSend: "Senden",
     chatStop: "\u23F9 Stopp",
     chatApply: "\u2713 \xDCbernehmen",
+    chatCopyLast: "\u29C9 Letzte Antwort kopieren",
+    chatCopied: "\u2713 In die Zwischenablage kopiert",
     chatReset: "\u21BA Zur\xFCcksetzen",
     chatResetWithContext: "Chat zur\xFCckgesetzt. Text aus dem Editor wurde neu als Kontext geladen. Was m\xF6chtest du damit machen?",
     chatResetNoContext: "Chat zur\xFCckgesetzt. Was m\xF6chtest du mit deinem Text machen?",
@@ -114,6 +116,8 @@ var messages = {
     chatSend: "Send",
     chatStop: "\u23F9 Stop",
     chatApply: "\u2713 Apply",
+    chatCopyLast: "\u29C9 Copy last response",
+    chatCopied: "\u2713 Copied to clipboard",
     chatReset: "\u21BA Reset",
     chatResetWithContext: "Chat reset. The text from the editor has been reloaded as context. What would you like to do with it?",
     chatResetNoContext: "Chat reset. What would you like to do with your text?",
@@ -405,16 +409,63 @@ var LlmClient = class {
 
 // src/chat-modal.ts
 var import_obsidian = require("obsidian");
+function clipboardWrite(text) {
+  var _a;
+  if ((_a = navigator.clipboard) == null ? void 0 : _a.writeText) {
+    void navigator.clipboard.writeText(text).catch(() => execCommandCopy(text));
+  } else {
+    execCommandCopy(text);
+  }
+}
+function execCommandCopy(text) {
+  const ta = document.createElement("textarea");
+  ta.value = text;
+  ta.style.position = "fixed";
+  ta.style.opacity = "0";
+  document.body.appendChild(ta);
+  ta.select();
+  try {
+    document.execCommand("copy");
+  } catch (e) {
+  }
+  ta.remove();
+}
+function wrapAssistantBubble(bubble) {
+  var _a;
+  const wrapper = document.createElement("div");
+  wrapper.addClass("llmta-bubble-wrap");
+  (_a = bubble.parentNode) == null ? void 0 : _a.insertBefore(wrapper, bubble);
+  wrapper.appendChild(bubble);
+  return wrapper;
+}
+function addCopyButton(modal, wrapper, bubble) {
+  const btn = wrapper.createEl("button", { cls: "llmta-copy-btn" });
+  btn.setText("\u29C9");
+  btn.ariaLabel = "Copy";
+  btn.addEventListener("click", (evt) => {
+    evt.stopPropagation();
+    const text = bubble.getText();
+    if (!text.trim()) return;
+    clipboardWrite(text);
+    modal.generatedText = text;
+    modal.markCopied(btn);
+  });
+}
 var FreePromptModal = class extends import_obsidian.Modal {
   constructor(plugin, editor) {
     super(plugin.app);
     this.messages = [];
     this.abortController = null;
+    // Latest assistant answer — public so the copy-button helper can set it
+    // when an older bubble is copied.
     this.generatedText = "";
+    this.isModalOpen = false;
+    this.boundKeydown = null;
     this.plugin = plugin;
     this.editor = editor;
   }
   onOpen() {
+    this.isModalOpen = true;
     this.contentEl.addClass("llmta-chat-modal");
     this.titleEl.setText(t("chatTitle"));
     const sel = getEditorSelection(this.editor);
@@ -454,10 +505,30 @@ var FreePromptModal = class extends import_obsidian.Modal {
       cls: "mod-cta"
     });
     this.applyBtn.addEventListener("click", () => this.handleApply());
+    this.copyBtn = footer.createEl("button", { text: t("chatCopyLast") });
+    this.copyBtn.addEventListener("click", () => this.copyLatest());
     this.resetBtn = footer.createEl("button", { text: t("chatReset") });
     this.resetBtn.addEventListener("click", () => this.handleReset());
+    this.boundKeydown = (evt) => {
+      if (!this.isModalOpen) return;
+      if (evt.key !== "c" || !(evt.ctrlKey || evt.metaKey) || evt.shiftKey || evt.altKey) return;
+      const active = document.activeElement;
+      if (active && (active === this.inputEl || active.tagName === "TEXTAREA" || active.tagName === "INPUT")) return;
+      if (this.chatEl && this.chatEl.contains(active)) return;
+      const selection = window.getSelection();
+      if (selection && selection.toString().trim()) return;
+      if (!this.generatedText.trim()) return;
+      evt.preventDefault();
+      this.copyLatest();
+    };
+    document.addEventListener("keydown", this.boundKeydown, true);
   }
   onClose() {
+    this.isModalOpen = false;
+    if (this.boundKeydown) {
+      document.removeEventListener("keydown", this.boundKeydown, true);
+      this.boundKeydown = null;
+    }
     this.stopStreaming();
   }
   // Mirrors buildInitialChatMessages from content.js
@@ -468,14 +539,34 @@ var FreePromptModal = class extends import_obsidian.Modal {
     }
     return [{ role: "system", content: systemContent }];
   }
+  // A small system bubble (welcome/reset notice) — no copy button.
+  addSystemBubble(text) {
+    this.chatEl.createEl("div", { cls: "llmta-bubble llmta-bubble-system" }).setText(text);
+  }
   addBubble(role, text) {
     const bubble = this.chatEl.createEl("div", { cls: `llmta-bubble llmta-bubble-${role}` });
     bubble.setText(text);
-    if (role === "assistant" || role === "system") {
-      bubble.addClass("llmta-bubble-markdown");
-      bubble.setText(text);
-    }
     return bubble;
+  }
+  // Assistant bubbles get a floating copy button (wrapped for positioning).
+  addAssistantBubble() {
+    const bubble = this.chatEl.createEl("div", { cls: "llmta-bubble llmta-bubble-assistant" });
+    const wrapper = wrapAssistantBubble(bubble);
+    addCopyButton(this, wrapper, bubble);
+    return bubble;
+  }
+  copyLatest() {
+    if (!this.generatedText.trim()) {
+      new import_obsidian.Notice(t("errorPrefix") + t("errorNoResult"));
+      return;
+    }
+    clipboardWrite(this.generatedText);
+    new import_obsidian.Notice(t("chatCopied"));
+  }
+  markCopied(btn) {
+    const prev = btn.getText();
+    btn.setText("\u2713");
+    setTimeout(() => btn.setText(prev), 1500);
   }
   setGenerating(generating) {
     this.sendBtn.style.display = generating ? "none" : "";
@@ -493,7 +584,7 @@ var FreePromptModal = class extends import_obsidian.Modal {
     this.messages.push({ role: "user", content: instruction });
     this.inputEl.value = "";
     this.setGenerating(true);
-    const bubble = this.addBubble("assistant", "");
+    const bubble = this.addAssistantBubble();
     let first = true;
     this.abortController = new AbortController();
     const client = this.plugin.getClient();
@@ -540,8 +631,9 @@ var FreePromptModal = class extends import_obsidian.Modal {
     const sel = getEditorSelection(this.editor);
     if (sel.isSelection) {
       this.editor.replaceRange(this.generatedText, sel.from, sel.to);
+    } else {
+      this.editor.replaceRange(this.generatedText, sel.from, sel.from);
     }
-    this.editor.replaceRange(this.generatedText, sel.from, sel.from);
     this.close();
   }
   handleReset() {
