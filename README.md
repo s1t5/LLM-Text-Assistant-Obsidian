@@ -4,13 +4,12 @@
 
 <div style="display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 20px;">
   <img src="https://img.shields.io/badge/Obsidian-Plugin-7C3AED?style=for-the-badge&logo=obsidian&logoColor=white" alt="Obsidian Plugin">
-  
   <a href="LICENSE" target="_blank"><img src="https://img.shields.io/badge/License-GPL--3.0-blue?style=for-the-badge" alt="License GPL-3.0"></a>
   <a href="https://www.buymeacoffee.com/s1t5" target="_blank"><img src="https://img.shields.io/badge/Buy%20Me%20a%20Coffee-s1t5-FFDD00?style=for-the-badge&logo=buy-me-a-coffee&logoColor=black" alt="Buy Me a Coffee"></a>
   <a href="https://ko-fi.com/s1t5dev" target="_blank"><img src="https://img.shields.io/badge/Ko--Fi-s1t5dev-FF5E5B?style=for-the-badge&logo=ko-fi&logoColor=white" alt="Ko-fi"></a>
 </div>
 
-This is the **Obsidian edition** of LLM Text Assistant — the same actions, prompts and streaming behaviour as the browser extension (Chrome/Firefox/Thunderbird), adapted to the Obsidian editor.
+This is the **Obsidian edition** of LLM Text Assistant — the browser extension (Chrome/Firefox/Thunderbird) by the same author, with the same actions, prompts and streaming behaviour, adapted to the Obsidian editor.
 
 ## ✨ Key Features
 
@@ -57,7 +56,7 @@ This is the **Obsidian edition** of LLM Text Assistant — the same actions, pro
 **Option 2 — Build from source** (Node.js ≥ 20, npm)
 
 ```bash
-git clone REMOVE.git
+git clone <repository-url>
 cd obsidian-llm
 npm install
 npm run build      # bundles main.js
