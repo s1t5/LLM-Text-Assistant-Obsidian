@@ -86,6 +86,45 @@
 	margin-top: 10px;
 }
 
+.llmta-chat-footer .llmta-chat-copy {
+	margin-left: auto;
+}
+
+/* --- Assistant bubble copy button --- */
+.llmta-bubble-wrap {
+	position: relative;
+	align-self: flex-start;
+	max-width: 85%;
+}
+
+.llmta-bubble-wrap .llmta-bubble {
+	max-width: none;
+}
+
+.llmta-copy-btn {
+	position: absolute;
+	top: 4px;
+	right: -30px;
+	width: 24px;
+	height: 24px;
+	padding: 0;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	border: 1px solid var(--background-modifier-border);
+	border-radius: var(--radius-s);
+	background: var(--background-secondary);
+	color: var(--text-muted);
+	cursor: pointer;
+	opacity: 0;
+	transition: opacity 0.15s ease;
+}
+
+.llmta-bubble-wrap:hover .llmta-copy-btn,
+.llmta-copy-btn:focus-visible {
+	opacity: 1;
+}
+
 /* --- Settings: system prompt textareas --- */
 .llmta-settings-textarea {
 	width: 100%;

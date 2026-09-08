@@ -8,6 +8,57 @@ import { ChatMessage, LlmClient } from "./llm";
 import { getEditorSelection } from "./main";
 import type LlmTextAssistantPlugin from "./main";
 
+// --- helpers ---
+
+function clipboardWrite(text: string): void {
+	// Obsidian's Electron clipboard is not part of the public typings; use
+	// the web Clipboard API with an execCommand fallback for older setups.
+	if (navigator.clipboard?.writeText) {
+		void navigator.clipboard.writeText(text).catch(() => execCommandCopy(text));
+	} else {
+		execCommandCopy(text);
+	}
+}
+
+function execCommandCopy(text: string): void {
+	const ta = document.createElement("textarea");
+	ta.value = text;
+	ta.style.position = "fixed";
+	ta.style.opacity = "0";
+	document.body.appendChild(ta);
+	ta.select();
+	try {
+		document.execCommand("copy");
+	} catch {
+		// ignore — notice below reflects the best-effort result
+	}
+	ta.remove();
+}
+
+// Bubbles are wrapped so the copy button can float on the assistant bubble.
+function wrapAssistantBubble(bubble: HTMLElement): HTMLElement {
+	const wrapper = document.createElement("div");
+	wrapper.addClass("llmta-bubble-wrap");
+	bubble.parentNode?.insertBefore(wrapper, bubble);
+	wrapper.appendChild(bubble);
+	return wrapper;
+}
+
+function addCopyButton(modal: FreePromptModal, wrapper: HTMLElement, bubble: HTMLElement): void {
+	const btn = wrapper.createEl("button", { cls: "llmta-copy-btn" });
+	btn.setText("⧉");
+	btn.ariaLabel = "Copy";
+	btn.addEventListener("click", (evt) => {
+		evt.stopPropagation();
+		const text = bubble.getText();
+		if (!text.trim()) return;
+		clipboardWrite(text);
+		// Remember as the latest assistant answer for "Apply" / copy-last
+		modal.generatedText = text;
+		modal.markCopied(btn);
+	});
+}
+
 export class FreePromptModal extends Modal {
 	private plugin: LlmTextAssistantPlugin;
 	private editor: Editor;
@@ -21,8 +72,10 @@ export class FreePromptModal extends Modal {
 	private sendBtn!: HTMLButtonElement;
 	private stopBtn!: HTMLButtonElement;
 	private applyBtn!: HTMLButtonElement;
+	private copyBtn!: HTMLButtonElement;
 	private resetBtn!: HTMLButtonElement;
 	private statusEl!: HTMLElement;
+	private isModalOpen = false;
 
 	constructor(plugin: LlmTextAssistantPlugin, editor: Editor) {
 		super(plugin.app);
@@ -31,6 +84,7 @@ export class FreePromptModal extends Modal {
 	}
 
 	onOpen() {
+		this.isModalOpen = true;
 		this.contentEl.addClass("llmta-chat-modal");
 		this.titleEl.setText(t("chatTitle"));
 
@@ -76,7 +130,7 @@ export class FreePromptModal extends Modal {
 			}
 		});
 
-		// --- Footer with Apply / Reset ---
+		// --- Footer with Copy / Apply / Reset ---
 		const footer = this.contentEl.createEl("div", { cls: "llmta-chat-footer" });
 		this.applyBtn = footer.createEl("button", {
 			text: t("chatApply"),
@@ -84,11 +138,30 @@ export class FreePromptModal extends Modal {
 		});
 		this.applyBtn.addEventListener("click", () => this.handleApply());
 
+		this.copyBtn = footer.createEl("button", { text: t("chatCopyLast") });
+		this.copyBtn.addEventListener("click", () => this.copyLatest());
+
 		this.resetBtn = footer.createEl("button", { text: t("chatReset") });
 		this.resetBtn.addEventListener("click", () => this.handleReset());
+
+		// Ctrl/Cmd+C inside the chat log copies the latest assistant answer
+		// when no text is selected (mirrors the extension's chat copy UX).
+		this.registerDomEvent(document, "keydown", (evt) => {
+			if (!this.isModalOpen) return;
+			if (evt.key !== "c" || !(evt.ctrlKey || evt.metaKey) || evt.shiftKey || evt.altKey) return;
+			const active = document.activeElement;
+			if (active && (active === this.inputEl || active.tagName === "TEXTAREA" || active.tagName === "INPUT")) return;
+			if (this.chatEl && this.chatEl.contains(active)) return;
+			const selection = window.getSelection();
+			if (selection && selection.toString().trim()) return; // let Obsidian copy the selection
+			if (!this.generatedText.trim()) return;
+			evt.preventDefault();
+			this.copyLatest();
+		});
 	}
 
 	onClose() {
+		this.isModalOpen = false;
 		this.stopStreaming();
 	}
 
@@ -102,15 +175,38 @@ export class FreePromptModal extends Modal {
 		return [{ role: "system", content: systemContent }];
 	}
 
+	// A small system bubble (welcome/reset notice) — no copy button.
+	private addSystemBubble(text: string): void {
+		this.chatEl.createEl("div", { cls: "llmta-bubble llmta-bubble-system" }).setText(text);
+	}
+
 	private addBubble(role: "user" | "system" | "assistant", text: string): HTMLElement {
 		const bubble = this.chatEl.createEl("div", { cls: `llmta-bubble llmta-bubble-${role}` });
-		// render markdown is not needed; plain text is fine for chat transcript
 		bubble.setText(text);
-		if (role === "assistant" || role === "system") {
-			bubble.addClass("llmta-bubble-markdown");
-			bubble.setText(text);
-		}
 		return bubble;
+	}
+
+	// Assistant bubbles get a floating copy button (wrapped for positioning).
+	private addAssistantBubble(): HTMLElement {
+		const bubble = this.chatEl.createEl("div", { cls: "llmta-bubble llmta-bubble-assistant" });
+		const wrapper = wrapAssistantBubble(bubble);
+		addCopyButton(this, wrapper, bubble);
+		return bubble;
+	}
+
+	copyLatest(): void {
+		if (!this.generatedText.trim()) {
+			new Notice(t("errorPrefix") + t("errorNoResult"));
+			return;
+		}
+		clipboardWrite(this.generatedText);
+		new Notice(t("chatCopied"));
+	}
+
+	markCopied(btn: HTMLButtonElement): void {
+		const prev = btn.getText();
+		btn.setText("✓");
+		setTimeout(() => btn.setText(prev), 1500);
 	}
 
 	private setGenerating(generating: boolean) {
@@ -132,7 +228,7 @@ export class FreePromptModal extends Modal {
 		this.inputEl.value = "";
 
 		this.setGenerating(true);
-		const bubble = this.addBubble("assistant", "");
+		const bubble = this.addAssistantBubble();
 		let first = true;
 
 		this.abortController = new AbortController();
@@ -184,7 +280,9 @@ export class FreePromptModal extends Modal {
 		const sel = getEditorSelection(this.editor);
 		if (sel.isSelection) {
 			this.editor.replaceRange(this.generatedText, sel.from, sel.to);
-		} this.editor.replaceRange(this.generatedText, sel.from, sel.from);
+		} else {
+			this.editor.replaceRange(this.generatedText, sel.from, sel.from);
+		}
 		this.close();
 	}
 

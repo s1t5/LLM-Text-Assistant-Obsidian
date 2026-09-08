@@ -21,6 +21,8 @@ export type I18nKey =
 	| "chatSend"
 	| "chatStop"
 	| "chatApply"
+	| "chatCopyLast"
+	| "chatCopied"
 	| "chatReset"
 	| "chatResetWithContext"
 	| "chatResetNoContext"
@@ -77,6 +79,8 @@ const messages: Record<string, Record<I18nKey, string>> = {
 		chatSend: "Senden",
 		chatStop: "⏹ Stopp",
 		chatApply: "✓ Übernehmen",
+		chatCopyLast: "⧉ Letzte Antwort kopieren",
+		chatCopied: "✓ In die Zwischenablage kopiert",
 		chatReset: "↺ Zurücksetzen",
 		chatResetWithContext:
 			"Chat zurückgesetzt. Text aus dem Editor wurde neu als Kontext geladen. Was möchtest du damit machen?",
@@ -137,6 +141,8 @@ const messages: Record<string, Record<I18nKey, string>> = {
 		chatSend: "Send",
 		chatStop: "⏹ Stop",
 		chatApply: "✓ Apply",
+		chatCopyLast: "⧉ Copy last response",
+		chatCopied: "✓ Copied to clipboard",
 		chatReset: "↺ Reset",
 		chatResetWithContext:
 			"Chat reset. The text from the editor has been reloaded as context. What would you like to do with it?",
