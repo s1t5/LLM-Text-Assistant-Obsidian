@@ -1,124 +1,133 @@
-# 🤖 LLM Text Assistant — Obsidian-Plugin
+# 🤖 LLM Text Assistant – Obsidian Plugin
 
-**Text in Obsidian-Notizen mit jedem OpenAI-kompatiblen LLM verarbeiten, übersetzen und verbessern — direkt im Editor**
+**Process, translate and refine text in your Obsidian notes with LLMs, directly in the editor**
 
-Dieses Plugin ist die Obsidian-Variante der Browser-Erweiterung LLM Text Assistent (Chrome/Firefox/Thunderbird) — gleiche Aktionen, gleiche System-Prompts, gleiches Streaming-Verhalten, angepasst an den Obsidian-Editor.
+<div style="display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 20px;">
+  <img src="https://img.shields.io/badge/Obsidian-Plugin-7C3AED?style=for-the-badge&logo=obsidian&logoColor=white" alt="Obsidian Plugin">
+  
+  <a href="LICENSE" target="_blank"><img src="https://img.shields.io/badge/License-GPL--3.0-blue?style=for-the-badge" alt="License GPL-3.0"></a>
+  <a href="https://www.buymeacoffee.com/s1t5" target="_blank"><img src="https://img.shields.io/badge/Buy%20Me%20a%20Coffee-s1t5-FFDD00?style=for-the-badge&logo=buy-me-a-coffee&logoColor=black" alt="Buy Me a Coffee"></a>
+  <a href="https://ko-fi.com/s1t5dev" target="_blank"><img src="https://img.shields.io/badge/Ko--Fi-s1t5dev-FF5E5B?style=for-the-badge&logo=ko-fi&logoColor=white" alt="Ko-fi"></a>
+</div>
 
-## ✨ Features
+This is the **Obsidian edition** of LLM Text Assistant — the same actions, prompts and streaming behaviour as the browser extension (Chrome/Firefox/Thunderbird), adapted to the Obsidian editor.
 
-- **Vier Built-in-Aktionen**: 🌐 Übersetzen, ✍️ Ausformulieren, 📋 Zusammenfassen, ✅ Rechtschreibung & Grammatik — per Kommando-Palette, Ribbon-Icon, Rechtsklick-Kontextmenü oder Fuzzy-Suche-Menü
-- **Custom Actions**: Eigene Aktionen mit Emoji, Titel und System-Prompt
-- **Freier Prompt (Chat-Modus)**: Chat-Fenster mit der aktuellen Auswahl als Kontext; mehrere Anweisungen nacheinander, Ergebnis per „Übernehmen" in den Editor
-- **Streaming (Live-Tippen)**: Text erscheint Token für Token während das Modell generiert
-- **Undo-Toast**: Nach jedem Ersetzen erscheint ein Toast mit Rückgängig-Button (8 Sekunden)
-- **Abbrechen**: Laufende Anfrage per Klick auf den „Verarbeite…"-Toast stoppen; bereits empfangener Text bleibt
-- **Robuste Fehlerbehandlung**: Konfigurierbares Timeout (Standard 60 s), automatische Retries bei Netzwerkfehlern und Rate-Limits (429/5xx), klare Fehlermeldungen
-- **Ohne Auswahl**: wird die ganze Notiz verarbeitet
-- **Zweisprachig**: UI und Standard-Prompts auf Deutsch und Englisch (folgt der Obsidian-Sprache)
+## ✨ Key Features
 
-## 🚀 Installation
+### 📌 Core Features
+- **Four built-in actions**: 🌐 Translate, ✍️ Expand, 📋 Summarize, ✅ Grammar & Spelling, available via the editor context menu (right-click), the command palette, the ribbon icon ✨ and its action menu
+- **Custom actions**: Define your own actions with emoji, title and system prompt
+- **Free Prompt (Chat mode)**: Open a chat window with the current selection as context and give iterative instructions with full context; apply the result back into the note
+- **Copy responses**: Hover any response for its ⧉ copy button, use "Copy last response", or press Ctrl/Cmd+C with nothing selected
+- **Streaming results (live typing)**: Text appears token by token as the model generates it, no waiting for the full response
+- **Selection or whole note**: Processes the selection — or the entire note when nothing is selected
 
-### Variante A: Manuell aus dem Release (empfohlen)
+### ⌨️ UX
+- **Undo toast**: After every replacement a toast appears with an **Undo** button (8 seconds)
+- **Cancel requests**: Abort a running request by clicking the "Processing…" toast or the stop button in chat, already received text is kept
+- **Native Obsidian hotkeys**: Every action is a command — assign hotkeys via Obsidian's Hotkeys settings
+- **Robust error handling**: Configurable timeout (default 60s), automatic retries on network errors and rate limits (429/5xx), clear error messages (e.g. "check your API key" on 401)
 
-1. Lade `main.js`, `styles.css` und `manifest.json` aus dem neuesten Release bzw. aus diesem Repository herunter.
-2. Öffne Obsidian → **Einstellungen → Community-Plugins** → schalte den **Restricted Mode** (Sicherheitsmodus) aus, falls noch nicht geschehen.
-3. Klicke bei „Community-Plugins" auf das Zahnrad → **Plugin aus Dateien installieren** (ab Obsidian 1.8) und wähle die drei Dateien — **oder**:
-4. Lege den Ordner `<dein-Vault>/.obsidian/plugins/llm-text-assistant/` an und kopiere `main.js`, `styles.css` und `manifest.json` hinein.
-5. Aktiviere das Plugin in der Liste der Community-Plugins (**„LLM Text Assistant"** → On).
-6. Konfiguriere es unter **Einstellungen → LLM Text Assistant** (API-URL, Modell, ggf. API-Key).
+### 🔌 Provider Support
+- Works with **any OpenAI-compatible Chat Completions API**:
+  - **Cloud**: OpenAI, Mistral, Groq, Google Gemini (OpenAI-compat endpoint) and more
+  - **Local**: Ollama, LM Studio, llama.cpp, vLLM; no API key required, data never leaves your machine
+- **Flexible configuration**: API URL, API key, model, temperature, timeout
+- **Customizable system prompts** for every built-in action (e.g. `{TARGET_LANGUAGE}` placeholder for translation)
 
-### Variante B: Aus dem Quellcode bauen
+### 🌍 Internationalization
+- Full UI and default prompts in **English and German** (auto-selected by Obsidian language)
+- Target language for translation is freely configurable
 
-Voraussetzungen: Node.js ≥ 20 und npm.
+## 🚀 Quick Start
+
+### Prerequisites
+- [Obsidian](https://obsidian.md) 1.4.0 or newer (Restricted Mode off for community plugins)
+- An OpenAI-compatible API endpoint (cloud or local)
+
+### 🛠️ Installation
+
+**Option 1 — Manual install**
+
+1. Download `main.js`, `styles.css` and `manifest.json` from the repository
+2. Create the folder `<your-vault>/.obsidian/plugins/llm-text-assistant/` and copy the three files into it — or use Obsidian 1.8+: **Settings → Community Plugins → Install from files**
+3. Enable **LLM Text Assistant** under Settings → Community Plugins
+4. Configure your endpoint under Settings → LLM Text Assistant
+
+**Option 2 — Build from source** (Node.js ≥ 20, npm)
 
 ```bash
-git clone <repository-url>
+git clone REMOVE.git
 cd obsidian-llm
 npm install
-npm run build      # erzeugt main.js
-npm run smoke      # Kern-Tests (Streaming, Retry, Abort, i18n)
+npm run build      # bundles main.js
+npm run smoke      # core tests (streaming, retry, abort, i18n)
 ```
 
-Danach `main.js`, `styles.css` und `manifest.json` wie in Variante A in den Plugin-Ordner kopieren.
+## ⚙️ Configuration
 
-**Für Entwicklung mit Auto-Reload:** statt `npm run build` → `npm run dev` laufen lassen und das [Hot-Reload-Plugin](https://github.com/pfrankov/obsidian-hot-reload) verwenden.
+Open **Settings → LLM Text Assistant**:
 
-## ⚙️ Konfiguration
+| Setting | Description |
+|---------|-------------|
+| **API URL** | Chat Completions endpoint, e.g. `https://api.openai.com/v1/chat/completions` |
+| **API Key** | Your API key (leave empty for local endpoints) |
+| **Model** | e.g. `gpt-4o-mini`, `llama3.1`, `mistral` |
+| **Temperature** | Creativity (0–2, default: 0.3) |
+| **Timeout (seconds)** | Max wait time per attempt (default: 60). Retries twice on timeout. |
+| **Target language (Translate)** | Language to translate into (e.g. English, German, French) |
+| **System prompts** | Per-action instructions, e.g. `{TARGET_LANGUAGE}` placeholder for translation |
+| **Custom actions** | Your own actions with emoji, title and prompt |
+| **Free prompt** | Show/hide the 💬 Free prompt entry |
 
-**Einstellungen → LLM Text Assistant:**
+Hotkeys: every action appears in Obsidian's command palette — assign hotkeys under **Settings → Hotkeys**.
 
-| Einstellung | Beschreibung |
-|---|---|
-| **API URL** | Chat-Completions-Endpunkt, z. B. `https://api.openai.com/v1/chat/completions` |
-| **API Key** | Dein API-Key (bei lokalen Endpunkten leer lassen) |
-| **Modell** | z. B. `gpt-4o-mini`, `llama3.1`, `mistral` |
-| **Temperature** | Kreativität (0–2, Standard: 0.3) |
-| **Timeout (Sekunden)** | Max. Wartezeit pro Versuch (Standard: 60), 2 Retries |
-| **Zielsprache** | Sprache, in die übersetzt wird (Standard: Englisch) |
-| **System-Prompts** | Pro Aktion anpassbar, `{TARGET_LANGUAGE}`-Platzhalter beim Übersetzen |
-| **Custom Actions** | Eigene Aktionen (Emoji, Titel, Prompt) |
-| **Freier Prompt** | Chat-Eintrag im Menü anzeigen/ausblenden |
+### Local endpoint examples
 
-### Lokale Endpunkt-Beispiele
+| Provider | URL | API Key |
+|----------|-----|---------|
+| **Ollama** | `http://localhost:11434/v1/chat/completions` | leave empty |
+| **LM Studio** | `http://localhost:1234/v1/chat/completions` | leave empty |
 
-| Anbieter | URL | API Key |
-|---|---|---|
-| **Ollama** | `http://localhost:11434/v1/chat/completions` | leer lassen |
-| **LM Studio** | `http://localhost:1234/v1/chat/completions` | leer lassen |
-| **llama.cpp Server** | `http://localhost:8080/v1/chat/completions` | leer lassen (oder dein konfigurierter Key) |
+## 📖 Usage
 
-## 📖 Verwendung
+1. Select text in the editor (or select nothing to process the **whole note**)
+2. Choose an action via right-click context menu, command palette (`Ctrl/Cmd+P`), the ribbon icon ✨ or its action menu
+3. The processed text replaces the selection **live** (streaming)
+4. **Cancel**: click the "Processing…" toast or ⏹ Stop in the chat
+5. **Undo**: use the button in the toast (8 seconds)
+6. **Copy**: in the free prompt chat, hover a response and click ⧉, use "Copy last response", or press Ctrl/Cmd+C with nothing selected
 
-1. Text im Editor markieren (ohne Markierung wird die **gesamte Notiz** verarbeitet)
-2. Aktion wählen per:
-   - Rechtsklick → Kontextmenü → Aktions-Eintrag
-   - Kommando-Palette (`Strg/Cmd+P`) → „LLM Text Assistant: …"
-   - Ribbon-Icon ✨ → Fuzzy-Suche-Menü
-3. Das Ergebnis ersetzt die Auswahl **live** (Streaming)
-4. **Abbrechen**: Klick auf den „Verarbeite…"-Toast
-5. **Rückgängig**: Button im grünen Toast (8 s)
+### 💬 Free Prompt (Chat mode)
 
-### Freier Prompt (Chat)
+Open it via the context menu or the action menu. Your current selection is loaded as context — give instructions one after another, e.g. "Improve the text" or "Translate into English". **✓ Apply** writes the result into the editor, **⧉** copies it to the clipboard, **↺ Reset** restarts the chat with fresh context.
 
-Rechtsklick → **💬 Freier Prompt** (oder via Ribbon-Menü). Es öffnet sich ein Chat-Fenster:
-- Die aktuelle Auswahl wird als Kontext geladen
-- Anweisungen nacheinander senden, z. B. „Verbessere den Text", „Übersetze ins Englische"
-- **✓ Übernehmen** schreibt das Ergebnis in den Editor (ersetzt die Auswahl bzw. fügt am Cursor ein)
-- **↺ Zurücksetzen** startet den Chat mit frischem Kontext neu
+## 🔒 Privacy & Security Notes
 
-## 🏗️ Entwicklung
+- **No data collection**: The plugin collects nothing. API calls go directly from Obsidian to the endpoint you configured, there is no intermediate server
+- **API key storage**: Your API key is stored in the plugin settings of your vault (`.obsidian/plugins/llm-text-assistant/data.json`) and only sent as `Authorization` header to the configured endpoint
 
-```
-obsidian-llm/
-├── src/
-│   ├── main.ts         # Plugin-Kern: Commands, Kontextmenü, Streaming-Replace, Undo-Toast, Settings-Tab
-│   ├── llm.ts          # OpenAI-kompatibler Client: Streaming, Timeout, Retry, SSE-Parsing
-│   ├── chat-modal.ts   # Freier-Prompt-Chat (Modal)
-│   ├── menu-modal.ts   # Fuzzy-Suche-Aktionsmenü
-│   ├── i18n.ts         # UI-Texte + Standard-Prompts (de/en)
-│   └── settings.ts     # Settings-Modell
-├── styles.css          # Chat-/Settings-Styles
-├── scripts/smoke.ts    # Kern-Tests ohne Obsidian-Runtime
-├── manifest.json
-├── esbuild.config.mjs
-└── tsconfig.json
-```
+## 🤝 Contributing
 
-```bash
-npm run build      # TypeCheck + Bundle → main.js
-npm run typecheck  # nur TypeScript-Check
-npm run smoke      # Kernlogik-Tests (benötigt Node ≥ 22.6)
-```
+We welcome contributions from the community!
 
-## 🔒 Datenschutz
+For code changes by third parties, please coordinate with us via email at mail@s1t5.dev before making any changes.
 
-- **Keine Datenerhebung**: API-Calls gehen direkt vom Client an den konfigurierten Endpunkt — kein Zwischenserver
-- Der API-Key wird nur in den Plugin-Einstellungen deines Vaults gespeichert (`.obsidian/plugins/llm-text-assistant/data.json`) und ausschließlich als `Authorization`-Header an den konfigurierten Endpunkt gesendet
+You can also:
+- Open an Issue for bug reports or feature requests
+- Submit a Pull Request for improvements
+- Help improve documentation
 
-## 🤝 Beitragen
+## 💖 Support the Project
 
-Für Änderungen Dritter bitte vorab per E-Mail an mail@s1t5.dev koordinieren. Bugreports und Feature-Wünsche gerne als Issue.
+If you find this project useful and would like to support its continued development, you can buy me a coffee! Your support helps me dedicate more time and resources to improving the application and adding new features. While financial support is not required, it is greatly appreciated and helps ensure the project's ongoing maintenance and development.
+
+<div style="display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 20px;">
+  <a href="https://www.buymeacoffee.com/s1t5" target="_blank"><img src="https://img.shields.io/badge/Buy%20Me%20a%20Coffee-s1t5-FFDD00?style=for-the-badge&logo=buy-me-a-coffee&logoColor=black" alt="Buy Me a Coffee"></a>
+  <a href="https://ko-fi.com/s1t5dev" target="_blank"><img src="https://img.shields.io/badge/Ko--Fi-s1t5dev-FF5E5B?style=for-the-badge&logo=ko-fi&logoColor=white" alt="Ko-fi"></a>
+  <a href="https://github.com/sponsors/s1t5" target="_blank"><img src="https://img.shields.io/badge/GitHub%20Sponsors-s1t5-FF9A00?style=for-the-badge&logo=github-sponsors&logoColor=white" alt="GitHub Sponsors"></a>
+</div>
 
 ---
 
-📄 *Lizenz: GNU General Public License v3 (siehe LICENSE-Datei)*
+📄 *License: GNU GENERAL PUBLIC LICENSE Version 3 (see LICENSE file)*
