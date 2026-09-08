@@ -46,22 +46,23 @@ This is the **Obsidian edition** of LLM Text Assistant — the browser extension
 
 ### 🛠️ Installation
 
-**Option 1 — Manual install**
+Install the plugin directly from the **Obsidian Community directory**:
 
-1. Download `main.js`, `styles.css` and `manifest.json` from the repository
+👉 **https://community.obsidian.md/plugins/llm-text-assistant**
+
+Or from within Obsidian: **Settings → Community Plugins → Browse** → search for **LLM Text Assistant** → Install.
+
+Then:
+1. Enable **LLM Text Assistant** under Settings → Community Plugins
+2. Configure your endpoint under Settings → LLM Text Assistant
+
+<details>
+<summary>Manual install (if the directory is temporarily unavailable)</summary>
+
+1. Download `main.js`, `styles.css` and `manifest.json` from the latest [release](../../releases)
 2. Create the folder `<your-vault>/.obsidian/plugins/llm-text-assistant/` and copy the three files into it — or use Obsidian 1.8+: **Settings → Community Plugins → Install from files**
-3. Enable **LLM Text Assistant** under Settings → Community Plugins
-4. Configure your endpoint under Settings → LLM Text Assistant
-
-**Option 2 — Build from source** (Node.js ≥ 20, npm)
-
-```bash
-git clone <repository-url>
-cd obsidian-llm
-npm install
-npm run build      # bundles main.js
-npm run smoke      # core tests (streaming, retry, abort, i18n)
-```
+3. Enable the plugin and configure your endpoint as above
+</details>
 
 ## ⚙️ Configuration
 
@@ -105,6 +106,20 @@ Open it via the context menu or the action menu. Your current selection is loade
 
 - **No data collection**: The plugin collects nothing. API calls go directly from Obsidian to the endpoint you configured, there is no intermediate server
 - **API key storage**: Your API key is stored in the plugin settings of your vault (`.obsidian/plugins/llm-text-assistant/data.json`) and only sent as `Authorization` header to the configured endpoint
+
+## 🏗️ Development
+
+Prerequisites: Node.js ≥ 20 and npm.
+
+```bash
+npm install
+npm run build      # type-check (tsc) + bundle main.js
+npm run typecheck  # TypeScript check only
+npm run smoke      # core tests without an Obsidian runtime (streaming, retry, abort, i18n)
+npm run dev        # watch mode for development
+```
+
+The smoke tests mock Obsidian's `requestUrl` via a Node loader hook (`scripts/smoke-hook.mjs`) — no Obsidian installation required. See `AGENTS.md` for conventions and release details.
 
 ## 🤝 Contributing
 
