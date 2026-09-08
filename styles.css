@@ -86,6 +86,13 @@
 	margin-top: 10px;
 }
 
+/* --- Settings: system prompt textareas --- */
+.llmta-settings-textarea {
+	width: 100%;
+	min-height: 90px;
+	resize: vertical;
+}
+
 /* --- Settings: custom actions --- */
 .llmta-custom-action {
 	border: 1px solid var(--background-modifier-border);

@@ -393,6 +393,8 @@ export default class LlmTextAssistantPlugin extends Plugin {
 
 // --- Settings tab (ported from options.html/options.js) ---
 
+type PromptKey = "promptTranslate" | "promptExpand" | "promptSummarize" | "promptGrammar";
+
 class LlmTextAssistantSettingTab extends PluginSettingTab {
 	plugin: LlmTextAssistantPlugin;
 
@@ -463,7 +465,7 @@ class LlmTextAssistantSettingTab extends PluginSettingTab {
 				? "Sprache, in die übersetzt wird, z. B. Englisch, Deutsch, Französisch"
 				: "Language to translate into, e.g. English, German, French"
 		).addText((text) => {
-			text.setValue(this.plugin.settings.targetLanguage).onChange(async (value) => {
+			text.setValue(this.plugin.settings.targetLanguage || t("defaultTargetLanguage")).onChange(async (value) => {
 				this.plugin.settings.targetLanguage = value;
 				await this.plugin.saveSettings();
 			});
@@ -471,19 +473,35 @@ class LlmTextAssistantSettingTab extends PluginSettingTab {
 
 		// --- System prompts ---
 		containerEl.createEl("h3", { text: t("settingsPrompts") });
-		const promptFields: Array<[keyof LlmTextAssistantSettings, string]> = [
-			["promptTranslate", t("actionTranslate", { TARGET_LANGUAGE: this.plugin.settings.targetLanguage || t("defaultTargetLanguage") })],
-			["promptExpand", t("actionExpand")],
-			["promptSummarize", t("actionSummarize")],
-			["promptGrammar", t("actionGrammar")],
+		// The settings model keeps the prompt fields empty by default so the
+		// localized defaults stay locale-aware. The UI therefore shows the
+		// effective prompt: the stored value, or the localized default.
+		const promptFields: Array<{ key: PromptKey; name: string; fallback: string }> = [
+			{
+				key: "promptTranslate",
+				name: t("actionTranslate", { TARGET_LANGUAGE: this.plugin.settings.targetLanguage || t("defaultTargetLanguage") }),
+				fallback: t("defaultPromptTranslate", { TARGET_LANGUAGE: "{TARGET_LANGUAGE}" }),
+			},
+			{ key: "promptExpand", name: t("actionExpand"), fallback: t("defaultPromptExpand") },
+			{ key: "promptSummarize", name: t("actionSummarize"), fallback: t("defaultPromptSummarize") },
+			{ key: "promptGrammar", name: t("actionGrammar"), fallback: t("defaultPromptGrammar") },
 		];
-		for (const [key, name] of promptFields) {
-			new Setting(containerEl).setName(name).addTextArea((text) => {
-				text.setValue((this.plugin.settings[key] as string) || "").onChange(async (value) => {
-					(this.plugin.settings[key] as string) = value;
+		for (const { key, name, fallback } of promptFields) {
+			const setting = new Setting(containerEl).setName(name);
+			if (key === "promptTranslate") {
+				setting.setDesc(
+					isGerman()
+						? "Platzhalter {TARGET_LANGUAGE} wird zur Laufzeit durch die Zielsprache ersetzt. Feld leeren = Standard-Prompt."
+						: "The {TARGET_LANGUAGE} placeholder is replaced with the target language at runtime. Empty field = default prompt."
+				);
+			}
+			setting.addTextArea((text) => {
+				text.setValue(this.plugin.settings[key] || fallback).onChange(async (value) => {
+					this.plugin.settings[key] = value;
 					await this.plugin.saveSettings();
 				});
-				text.inputEl.rows = 3;
+				text.inputEl.rows = 4;
+				text.inputEl.addClass("llmta-settings-textarea");
 			});
 		}
 
