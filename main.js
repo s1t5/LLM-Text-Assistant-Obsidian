@@ -40,7 +40,7 @@ __export(main_exports, {
   showUndoToast: () => showUndoToast
 });
 module.exports = __toCommonJS(main_exports);
-var import_obsidian3 = require("obsidian");
+var import_obsidian4 = require("obsidian");
 
 // src/i18n.ts
 var messages = {
@@ -190,6 +190,7 @@ var DEFAULT_SETTINGS = {
 };
 
 // src/llm.ts
+var import_obsidian = require("obsidian");
 var UserAbortError = class extends Error {
   constructor() {
     super("UserAbort");
@@ -197,18 +198,10 @@ var UserAbortError = class extends Error {
   }
 };
 function sleep(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
 }
-function mapApiError(status, errorText) {
+function mapApiError(status, detail) {
   const german = isGerman();
-  let detail = "";
-  try {
-    const parsed = JSON.parse(errorText);
-    if (parsed && parsed.error && parsed.error.message) {
-      detail = parsed.error.message;
-    }
-  } catch (e) {
-  }
   if (status === 401 || status === 403) {
     return german ? `API: Authentifizierung fehlgeschlagen (HTTP ${status}). Pr\xFCfe den API-Key.` : `API: authentication failed (HTTP ${status}). Check the API key.`;
   }
@@ -219,6 +212,16 @@ function mapApiError(status, errorText) {
     return german ? `API: Rate-Limit erreicht (HTTP 429). Bitte sp\xE4ter erneut versuchen.` : `API: rate limit reached (HTTP 429). Please try again later.`;
   }
   return german ? `API Fehler ${status}${detail ? ": " + detail : ""}` : `API error ${status}${detail ? ": " + detail : ""}`;
+}
+function extractApiDetail(errorText) {
+  try {
+    const parsed = JSON.parse(errorText);
+    if (parsed && typeof parsed === "object" && "error" in parsed && parsed.error && typeof parsed.error === "object" && "message" in parsed.error && typeof parsed.error.message === "string") {
+      return parsed.error.message;
+    }
+  } catch (e) {
+  }
+  return "";
 }
 function timeoutMessage(seconds) {
   return isGerman() ? `Zeit\xFCberschreitung nach ${seconds}s. L\xE4uft der Server bzw. ist der Endpunkt erreichbar?` : `Timeout after ${seconds}s. Is the server running / the endpoint reachable?`;
@@ -235,32 +238,38 @@ async function fetchWithRetry(config, requestBody, signal) {
       throw new UserAbortError();
     }
     const attemptController = new AbortController();
-    const timeoutId = setTimeout(() => attemptController.abort(), timeoutMs);
+    const timeoutId = window.setTimeout(() => attemptController.abort(), timeoutMs);
     const onUserAbort = () => attemptController.abort();
     signal.addEventListener("abort", onUserAbort);
     try {
-      const response = await requestUrl(requestBody, config, attemptController.signal);
-      clearTimeout(timeoutId);
+      const response = await performRequest(
+        config,
+        JSON.stringify(requestBody),
+        attemptController.signal
+      );
+      window.clearTimeout(timeoutId);
       signal.removeEventListener("abort", onUserAbort);
       return response;
     } catch (err) {
-      clearTimeout(timeoutId);
+      window.clearTimeout(timeoutId);
       signal.removeEventListener("abort", onUserAbort);
       if (signal.aborted) {
         throw new UserAbortError();
       }
-      const errTyped = err;
-      if (errTyped.name === "AbortError") {
+      if (err instanceof UserAbortError) throw err;
+      if (err instanceof Error && err.name === "AbortError") {
         lastError = new Error(timeoutMessage(timeoutMs / 1e3));
-      } else if (errTyped.status !== void 0) {
-        const status = errTyped.status;
-        const errorText = errTyped.message || "";
-        if ([400, 401, 403, 404].includes(status) || status >= 400 && status < 500 && status !== 408 && status !== 429) {
-          throw new Error(mapApiError(status, errorText));
-        }
-        lastError = new Error(mapApiError(status, errorText));
       } else {
-        lastError = new Error(networkErrorMessage());
+        const failure = err;
+        if (failure instanceof Error && typeof failure.status === "number") {
+          const detail = extractApiDetail(failure.message || "");
+          if ([400, 401, 403, 404].includes(failure.status) || failure.status >= 400 && failure.status < 500 && failure.status !== 408 && failure.status !== 429) {
+            throw new Error(mapApiError(failure.status, detail));
+          }
+          lastError = new Error(mapApiError(failure.status, detail));
+        } else {
+          lastError = new Error(networkErrorMessage());
+        }
       }
     }
     if (attempt < maxAttempts - 1) {
@@ -269,88 +278,130 @@ async function fetchWithRetry(config, requestBody, signal) {
   }
   throw lastError || new Error(isGerman() ? "Unbekannter Fehler" : "Unknown error");
 }
-async function requestUrl(requestBody, config, signal) {
+async function performRequest(config, body, signal) {
+  if (signal.aborted) {
+    throw new UserAbortError();
+  }
   const headers = {
     "Content-Type": "application/json"
   };
   if (config.apiKey) {
     headers["Authorization"] = `Bearer ${config.apiKey}`;
   }
-  const response = await fetch(config.apiUrl, {
-    method: "POST",
-    headers,
-    body: JSON.stringify(requestBody),
-    signal
+  const abortPromise = new Promise((_, reject) => {
+    const onAbort = () => reject(new UserAbortError());
+    if (signal.aborted) {
+      onAbort();
+      return;
+    }
+    signal.addEventListener("abort", onAbort, { once: true });
   });
-  if (!response.ok) {
-    const errorText = await response.text().catch(() => "");
-    const err = new Error(errorText);
-    err.status = response.status;
-    throw err;
+  const doRequest = async () => {
+    try {
+      const response = await (0, import_obsidian.requestUrl)({
+        url: config.apiUrl,
+        method: "POST",
+        headers,
+        body,
+        throw: false
+      });
+      if (response.status >= 400) {
+        const failure = new Error(response.text || "");
+        failure.status = response.status;
+        throw failure;
+      }
+      return {
+        text: response.text,
+        status: response.status,
+        contentType: response.headers["content-type"] || response.headers["Content-Type"] || ""
+      };
+    } catch (err) {
+      if (err instanceof Error && err.name === "AbortError") throw err;
+      if (err instanceof Error && typeof err.status !== "number") {
+        throw new Error(networkErrorMessage());
+      }
+      throw err;
+    }
+  };
+  try {
+    return await Promise.race([doRequest(), abortPromise]);
+  } finally {
   }
-  return response;
 }
-async function streamResponse(response, onToken, signal) {
-  var _a, _b, _c, _d, _e, _f;
-  const contentType = response.headers.get("content-type") || "";
-  if (!contentType.includes("text/event-stream")) {
-    const data = await response.json();
-    const content = (_c = (_b = (_a = data == null ? void 0 : data.choices) == null ? void 0 : _a[0]) == null ? void 0 : _b.message) == null ? void 0 : _c.content;
-    if (content === void 0) {
+async function streamResponse(completed, nextChunk, onToken, signal) {
+  if (!completed.contentType.includes("text/event-stream")) {
+    const content = extractMessageContent(completed.text);
+    if (content === null) {
       throw new Error(isGerman() ? "Ung\xFCltige API-Antwort" : "Invalid API response");
     }
     if (content) onToken(content);
     return content;
   }
-  if (!response.body || typeof response.body.getReader !== "function") {
-    throw new Error(
-      isGerman() ? "Streaming wird von diesem Endpunkt nicht unterst\xFCtzt" : "Streaming not supported by this endpoint"
-    );
-  }
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder("utf-8");
   let buffer = "";
   let fullText = "";
-  const onAbort = () => {
-    try {
-      reader.cancel();
-    } catch (e) {
+  const processLine = (line) => {
+    if (!line.startsWith("data:")) return false;
+    const payload = line.slice(5).trim();
+    if (payload === "[DONE]") return true;
+    const delta = extractDeltaContent(payload);
+    if (typeof delta === "string" && delta.length > 0) {
+      fullText += delta;
+      onToken(delta);
     }
+    return false;
   };
-  signal.addEventListener("abort", onAbort);
-  try {
-    for (; ; ) {
+  if (nextChunk) {
+    let done = false;
+    while (!done) {
       if (signal.aborted) {
         throw new UserAbortError();
       }
-      const { value, done } = await reader.read();
-      if (done) break;
-      buffer += decoder.decode(value, { stream: true });
-      let newlineIndex;
-      while ((newlineIndex = buffer.indexOf("\n")) >= 0) {
-        let line = buffer.slice(0, newlineIndex);
-        buffer = buffer.slice(newlineIndex + 1);
+      const chunk = await nextChunk();
+      if (!chunk || chunk.done) break;
+      buffer += chunk.text;
+      let newlineIndex2;
+      while ((newlineIndex2 = buffer.indexOf("\n")) >= 0) {
+        let line = buffer.slice(0, newlineIndex2);
+        buffer = buffer.slice(newlineIndex2 + 1);
         line = line.replace(/\r$/, "");
-        if (!line.startsWith("data:")) continue;
-        const payload = line.slice(5).trim();
-        if (payload === "[DONE]") {
+        if (processLine(line)) {
           return fullText;
-        }
-        try {
-          const json = JSON.parse(payload);
-          const delta = (_f = (_e = (_d = json == null ? void 0 : json.choices) == null ? void 0 : _d[0]) == null ? void 0 : _e.delta) == null ? void 0 : _f.content;
-          if (typeof delta === "string" && delta.length > 0) {
-            fullText += delta;
-            onToken(delta);
-          }
-        } catch (e) {
         }
       }
     }
-  } finally {
-    signal.removeEventListener("abort", onAbort);
+    return fullText;
+  }
+  buffer = completed.text;
+  let newlineIndex;
+  while ((newlineIndex = buffer.indexOf("\n")) >= 0) {
+    let line = buffer.slice(0, newlineIndex);
+    buffer = buffer.slice(newlineIndex + 1);
+    line = line.replace(/\r$/, "");
+    if (processLine(line)) {
+      return fullText;
+    }
   }
   return fullText;
+}
+function extractMessageContent(text) {
+  var _a, _b, _c;
+  try {
+    const data = JSON.parse(text);
+    const content = (_c = (_b = (_a = data == null ? void 0 : data.choices) == null ? void 0 : _a[0]) == null ? void 0 : _b.message) == null ? void 0 : _c.content;
+    return typeof content === "string" ? content : null;
+  } catch (e) {
+    return null;
+  }
+}
+function extractDeltaContent(payload) {
+  var _a, _b, _c;
+  try {
+    const json = JSON.parse(payload);
+    const delta = (_c = (_b = (_a = json == null ? void 0 : json.choices) == null ? void 0 : _a[0]) == null ? void 0 : _b.delta) == null ? void 0 : _c.content;
+    return typeof delta === "string" ? delta : null;
+  } catch (e) {
+    return null;
+  }
 }
 function isStreamUnsupported(err) {
   return err instanceof Error && /stream/i.test(err.message || "");
@@ -365,7 +416,6 @@ var LlmClient = class {
   // Streaming chat completion with non-streaming fallback.
   // Mirrors processTextStreaming/processFreePromptStreaming from background.js.
   async streamChat(messages2, signal, callbacks) {
-    var _a, _b, _c;
     const requestBody = {
       model: this.config.model,
       messages: messages2,
@@ -374,7 +424,12 @@ var LlmClient = class {
     };
     try {
       const response = await fetchWithRetry(this.config, requestBody, signal);
-      const fullText = await streamResponse(response, callbacks.onToken, signal);
+      const fullText = await streamResponse(
+        response,
+        null,
+        callbacks.onToken,
+        signal
+      );
       callbacks.onDone(fullText);
     } catch (err) {
       if (isStreamUnsupported(err)) {
@@ -382,9 +437,8 @@ var LlmClient = class {
           const body = { ...requestBody };
           delete body.stream;
           const response = await fetchWithRetry(this.config, body, signal);
-          const data = await response.json();
-          const content = (_c = (_b = (_a = data == null ? void 0 : data.choices) == null ? void 0 : _a[0]) == null ? void 0 : _b.message) == null ? void 0 : _c.content;
-          if (!content) {
+          const content = extractMessageContent(response.text);
+          if (typeof content !== "string" || !content) {
             throw new Error(isGerman() ? "Ung\xFCltige API-Antwort" : "Invalid API response");
           }
           callbacks.onDone(content);
@@ -398,7 +452,7 @@ var LlmClient = class {
   }
   dispatchError(err, signal, callbacks) {
     var _a;
-    if (signal.aborted || (err == null ? void 0 : err.name) === "UserAbortError") {
+    if (signal.aborted || err instanceof Error && err.name === "UserAbortError") {
       (_a = callbacks.onAborted) == null ? void 0 : _a.call(callbacks);
       return;
     }
@@ -408,50 +462,33 @@ var LlmClient = class {
 };
 
 // src/chat-modal.ts
-var import_obsidian = require("obsidian");
+var import_obsidian2 = require("obsidian");
 function clipboardWrite(text) {
-  var _a;
-  if ((_a = navigator.clipboard) == null ? void 0 : _a.writeText) {
-    void navigator.clipboard.writeText(text).catch(() => execCommandCopy(text));
-  } else {
-    execCommandCopy(text);
-  }
-}
-function execCommandCopy(text) {
-  const ta = document.createElement("textarea");
-  ta.value = text;
-  ta.style.position = "fixed";
-  ta.style.opacity = "0";
-  document.body.appendChild(ta);
-  ta.select();
-  try {
-    document.execCommand("copy");
-  } catch (e) {
-  }
-  ta.remove();
-}
-function wrapAssistantBubble(bubble) {
-  var _a;
-  const wrapper = document.createElement("div");
-  wrapper.addClass("llmta-bubble-wrap");
-  (_a = bubble.parentNode) == null ? void 0 : _a.insertBefore(wrapper, bubble);
-  wrapper.appendChild(bubble);
-  return wrapper;
-}
-function addCopyButton(modal, wrapper, bubble) {
-  const btn = wrapper.createEl("button", { cls: "llmta-copy-btn" });
-  btn.setText("\u29C9");
-  btn.ariaLabel = "Copy";
-  btn.addEventListener("click", (evt) => {
-    evt.stopPropagation();
-    const text = bubble.getText();
-    if (!text.trim()) return;
-    clipboardWrite(text);
-    modal.generatedText = text;
-    modal.markCopied(btn);
+  void navigator.clipboard.writeText(text).catch(() => {
+    new import_obsidian2.Notice(t("errorPrefix") + t("errorGeneric"));
   });
 }
-var FreePromptModal = class extends import_obsidian.Modal {
+function wrapAssistantBubble(parent, bubble) {
+  return parent.createDiv({ cls: "llmta-bubble-wrap" }, (wrapper) => {
+    wrapper.appendChild(bubble);
+  });
+}
+function addCopyButton(modal, wrapper, bubble) {
+  wrapper.createEl("button", { cls: "llmta-copy-btn" }, (btn) => {
+    btn.type = "button";
+    btn.setText("\u29C9");
+    btn.ariaLabel = "Copy";
+    btn.addEventListener("click", (evt) => {
+      evt.stopPropagation();
+      const text = bubble.getText();
+      if (!text.trim()) return;
+      clipboardWrite(text);
+      modal.generatedText = text;
+      modal.markCopied(btn);
+    });
+  });
+}
+var FreePromptModal = class extends import_obsidian2.Modal {
   constructor(plugin, editor) {
     super(plugin.app);
     this.messages = [];
@@ -471,26 +508,22 @@ var FreePromptModal = class extends import_obsidian.Modal {
     const sel = getEditorSelection(this.editor);
     const contextText = sel.text.trim() ? sel.text : "";
     this.messages = this.buildInitialMessages(contextText);
-    this.chatEl = this.contentEl.createEl("div", { cls: "llmta-chat-log" });
+    this.chatEl = this.contentEl.createDiv({ cls: "llmta-chat-log" });
     this.addBubble("system", contextText ? t("chatWelcomeWithContext") : t("chatWelcomeNoContext"));
-    this.statusEl = this.contentEl.createEl("div", { cls: "llmta-chat-status" });
-    this.statusEl.style.display = "none";
-    const inputRow = this.contentEl.createEl("div", { cls: "llmta-chat-input-row" });
-    this.inputEl = inputRow.createEl("textarea", {
-      cls: "llmta-chat-input"
-    });
+    this.statusEl = this.contentEl.createDiv({ cls: "llmta-chat-status is-hidden" });
+    const inputRow = this.contentEl.createDiv({ cls: "llmta-chat-input-row" });
+    this.inputEl = inputRow.createEl("textarea", { cls: "llmta-chat-input" });
     this.inputEl.placeholder = t("chatInputPlaceholder");
     this.inputEl.rows = 2;
-    const btnCol = inputRow.createEl("div", { cls: "llmta-chat-buttons" });
+    const btnCol = inputRow.createDiv({ cls: "llmta-chat-buttons" });
     this.sendBtn = btnCol.createEl("button", {
       text: t("chatSend"),
       cls: "mod-cta llmta-chat-send"
     });
     this.stopBtn = btnCol.createEl("button", {
       text: t("chatStop"),
-      cls: "llmta-chat-stop"
+      cls: "llmta-chat-stop is-hidden"
     });
-    this.stopBtn.style.display = "none";
     this.sendBtn.addEventListener("click", () => this.handleSend());
     this.stopBtn.addEventListener("click", () => this.stopStreaming());
     this.inputEl.addEventListener("keydown", (evt) => {
@@ -499,7 +532,7 @@ var FreePromptModal = class extends import_obsidian.Modal {
         this.handleSend();
       }
     });
-    const footer = this.contentEl.createEl("div", { cls: "llmta-chat-footer" });
+    const footer = this.contentEl.createDiv({ cls: "llmta-chat-footer" });
     this.applyBtn = footer.createEl("button", {
       text: t("chatApply"),
       cls: "mod-cta"
@@ -539,39 +572,36 @@ var FreePromptModal = class extends import_obsidian.Modal {
     }
     return [{ role: "system", content: systemContent }];
   }
-  // A small system bubble (welcome/reset notice) — no copy button.
-  addSystemBubble(text) {
-    this.chatEl.createEl("div", { cls: "llmta-bubble llmta-bubble-system" }).setText(text);
-  }
   addBubble(role, text) {
-    const bubble = this.chatEl.createEl("div", { cls: `llmta-bubble llmta-bubble-${role}` });
+    const bubble = this.chatEl.createDiv({ cls: `llmta-bubble llmta-bubble-${role}` });
     bubble.setText(text);
     return bubble;
   }
   // Assistant bubbles get a floating copy button (wrapped for positioning).
   addAssistantBubble() {
-    const bubble = this.chatEl.createEl("div", { cls: "llmta-bubble llmta-bubble-assistant" });
-    const wrapper = wrapAssistantBubble(bubble);
+    const holder = this.chatEl.createDiv({ cls: "llmta-bubble-holder" });
+    const bubble = holder.createDiv({ cls: "llmta-bubble llmta-bubble-assistant" });
+    const wrapper = wrapAssistantBubble(holder, bubble);
     addCopyButton(this, wrapper, bubble);
     return bubble;
   }
   copyLatest() {
     if (!this.generatedText.trim()) {
-      new import_obsidian.Notice(t("errorPrefix") + t("errorNoResult"));
+      new import_obsidian2.Notice(t("errorPrefix") + t("errorNoResult"));
       return;
     }
     clipboardWrite(this.generatedText);
-    new import_obsidian.Notice(t("chatCopied"));
+    new import_obsidian2.Notice(t("chatCopied"));
   }
   markCopied(btn) {
     const prev = btn.getText();
     btn.setText("\u2713");
-    setTimeout(() => btn.setText(prev), 1500);
+    window.setTimeout(() => btn.setText(prev), 1500);
   }
   setGenerating(generating) {
-    this.sendBtn.style.display = generating ? "none" : "";
-    this.stopBtn.style.display = generating ? "" : "none";
-    this.statusEl.style.display = generating ? "" : "none";
+    this.sendBtn.toggleClass("is-hidden", generating);
+    this.stopBtn.toggleClass("is-hidden", !generating);
+    this.statusEl.toggleClass("is-hidden", !generating);
     if (generating) {
       this.statusEl.setText(t("chatGenerating"));
     }
@@ -588,7 +618,7 @@ var FreePromptModal = class extends import_obsidian.Modal {
     let first = true;
     this.abortController = new AbortController();
     const client = this.plugin.getClient();
-    client.streamChat(this.messages, this.abortController.signal, {
+    void client.streamChat(this.messages, this.abortController.signal, {
       onToken: (token) => {
         if (first) {
           bubble.setText(token);
@@ -625,7 +655,7 @@ var FreePromptModal = class extends import_obsidian.Modal {
   }
   handleApply() {
     if (!this.generatedText.trim()) {
-      new import_obsidian.Notice(t("errorPrefix") + t("errorNoResult"));
+      new import_obsidian2.Notice(t("errorPrefix") + t("errorNoResult"));
       return;
     }
     const sel = getEditorSelection(this.editor);
@@ -651,8 +681,8 @@ var FreePromptModal = class extends import_obsidian.Modal {
 };
 
 // src/menu-modal.ts
-var import_obsidian2 = require("obsidian");
-var ActionMenuModal = class extends import_obsidian2.FuzzySuggestModal {
+var import_obsidian3 = require("obsidian");
+var ActionMenuModal = class extends import_obsidian3.FuzzySuggestModal {
   constructor(plugin, editor) {
     super(plugin.app);
     this.plugin = plugin;
@@ -681,7 +711,7 @@ var ActionMenuModal = class extends import_obsidian2.FuzzySuggestModal {
       this.plugin.openFreePrompt(this.editor);
       return;
     }
-    this.plugin.runAction(this.editor, item);
+    void this.plugin.runAction(this.editor, item);
   }
 };
 
@@ -800,11 +830,11 @@ function showUndoToast(handle) {
   const { editor, from, originalText, insertOffset } = handle;
   const finalTo = editor.offsetToPos(insertOffset);
   const originalFrom = from;
-  const notice = new import_obsidian3.Notice("", 8e3);
-  const el = notice.noticeEl;
+  const notice = new import_obsidian4.Notice("", 8e3);
+  const el = notice.messageEl;
   el.empty();
   el.addClass("llmta-undo-toast");
-  el.createEl("span", { text: t("undoReplaced") });
+  el.createSpan({ text: t("undoReplaced") });
   const btn = el.createEl("button", { text: t("undoButton") });
   btn.addEventListener("click", () => {
     try {
@@ -815,13 +845,13 @@ function showUndoToast(handle) {
     notice.hide();
   });
 }
-var LlmTextAssistantPlugin2 = class extends import_obsidian3.Plugin {
+var LlmTextAssistantPlugin2 = class extends import_obsidian4.Plugin {
   constructor() {
     super(...arguments);
     this.runningNotice = null;
   }
   async onload() {
-    initI18n(import_obsidian3.moment.locale());
+    initI18n(import_obsidian4.moment.locale());
     await this.loadSettings();
     this.addSettingTab(new LlmTextAssistantSettingTab(this.app, this));
     this.addRibbonIcon("sparkles", t("extensionName"), () => {
@@ -916,7 +946,7 @@ var LlmTextAssistantPlugin2 = class extends import_obsidian3.Plugin {
   openActionMenu() {
     const editor = this.getActiveEditor();
     if (!editor) {
-      new import_obsidian3.Notice(t("errorPrefix") + t("errorNoText"));
+      new import_obsidian4.Notice(t("errorPrefix") + t("errorNoText"));
       return;
     }
     new ActionMenuModal(this, editor).open();
@@ -929,14 +959,14 @@ var LlmTextAssistantPlugin2 = class extends import_obsidian3.Plugin {
   async runAction(editor, actionId) {
     const sel = getEditorSelection(editor);
     if (!sel.text.trim()) {
-      new import_obsidian3.Notice(t("errorPrefix") + t("errorNoText"));
+      new import_obsidian4.Notice(t("errorPrefix") + t("errorNoText"));
       return;
     }
     let messages2;
     try {
       messages2 = buildPromptParts(actionId, sel.text, this.settings);
     } catch (err) {
-      new import_obsidian3.Notice(t("errorPrefix") + (err.message || t("errorGeneric")));
+      new import_obsidian4.Notice(t("errorPrefix") + (err.message || t("errorGeneric")));
       return;
     }
     const controller = new AbortController();
@@ -951,19 +981,19 @@ var LlmTextAssistantPlugin2 = class extends import_obsidian3.Plugin {
       },
       onError: (message) => {
         this.hideProcessingNotice();
-        new import_obsidian3.Notice(t("errorPrefix") + message, 8e3);
+        new import_obsidian4.Notice(t("errorPrefix") + message, 8e3);
       },
       onAborted: () => {
         this.hideProcessingNotice();
-        new import_obsidian3.Notice(t("requestCancelled"));
+        new import_obsidian4.Notice(t("requestCancelled"));
       }
     });
   }
   // "Processing… Click to cancel" toast, ported from the extension's
   // floating loading icon.
   showProcessingNotice(controller) {
-    const notice = new import_obsidian3.Notice(t("iconTooltipProcessing"), 0);
-    notice.noticeEl.addEventListener("click", () => {
+    const notice = new import_obsidian4.Notice(t("iconTooltipProcessing"), 0);
+    notice.messageEl.addEventListener("click", () => {
       controller.abort();
       this.hideProcessingNotice();
     });
@@ -976,16 +1006,135 @@ var LlmTextAssistantPlugin2 = class extends import_obsidian3.Plugin {
     }
   }
 };
-var LlmTextAssistantSettingTab = class extends import_obsidian3.PluginSettingTab {
+var LlmTextAssistantSettingTab = class extends import_obsidian4.PluginSettingTab {
   constructor(app, plugin) {
     super(app, plugin);
     this.plugin = plugin;
   }
+  // Declarative settings for Obsidian's settings search (1.13.0+).
+  // Mirrors the imperative display() tab; the fallback rendering below stays
+  // authoritative for users on older app versions.
+  getSettingDefinitions() {
+    const german = isGerman();
+    const s = this.plugin.settings;
+    const text = (key, name, desc, placeholder) => {
+      var _a;
+      return {
+        name,
+        desc,
+        control: { type: "text", key, defaultValue: String((_a = s[key]) != null ? _a : ""), placeholder }
+      };
+    };
+    const textArea = (key, name, desc) => {
+      var _a;
+      return {
+        name,
+        desc,
+        control: { type: "textarea", key, defaultValue: String((_a = s[key]) != null ? _a : "") }
+      };
+    };
+    return [
+      {
+        type: "group",
+        heading: t("settingsHeading"),
+        items: [
+          text(
+            "apiUrl",
+            t("settingsApiUrl"),
+            german ? "z. B. OpenAI, Ollama (http://localhost:11434/v1/chat/completions) oder LM Studio" : "e.g. OpenAI, Ollama (http://localhost:11434/v1/chat/completions) or LM Studio",
+            "https://api.openai.com/v1/chat/completions"
+          ),
+          text(
+            "apiKey",
+            t("settingsApiKey"),
+            german ? "Bei lokalen Endpunkten leer lassen" : "Leave empty for local endpoints",
+            "sk-..."
+          ),
+          text(
+            "model",
+            t("settingsModel"),
+            german ? "z. B. gpt-4, llama3.1, mistral" : "e.g. gpt-4, llama3.1, mistral",
+            "gpt-3.5-turbo"
+          ),
+          text(
+            "temperature",
+            t("settingsTemperature"),
+            german ? "0 = deterministisch, 2 = sehr kreativ (Standard: 0.3)" : "0 = deterministic, 2 = very creative (default: 0.3)",
+            "0.3"
+          ),
+          text(
+            "timeoutSeconds",
+            t("settingsTimeout"),
+            german ? "Maximale Wartezeit pro Anfrage (Standard: 60)" : "Maximum wait time per request (default: 60)",
+            "60"
+          ),
+          text(
+            "targetLanguage",
+            t("settingsTargetLanguage"),
+            german ? "Sprache, in die \xFCbersetzt wird, z. B. Englisch, Deutsch, Franz\xF6sisch" : "Language to translate into, e.g. English, German, French",
+            t("defaultTargetLanguage")
+          )
+        ]
+      },
+      {
+        type: "group",
+        heading: t("settingsPrompts"),
+        items: [
+          textArea(
+            "promptTranslate",
+            t("actionTranslate", { TARGET_LANGUAGE: s.targetLanguage || t("defaultTargetLanguage") }),
+            german ? "Platzhalter {TARGET_LANGUAGE} wird zur Laufzeit durch die Zielsprache ersetzt. Feld leeren = Standard-Prompt." : "The {TARGET_LANGUAGE} placeholder is replaced with the target language at runtime. Empty field = default prompt."
+          ),
+          textArea(
+            "promptExpand",
+            t("actionExpand"),
+            german ? "Feld leeren = Standard-Prompt." : "Empty field = default prompt."
+          ),
+          textArea(
+            "promptSummarize",
+            t("actionSummarize"),
+            german ? "Feld leeren = Standard-Prompt." : "Empty field = default prompt."
+          ),
+          textArea(
+            "promptGrammar",
+            t("actionGrammar"),
+            german ? "Feld leeren = Standard-Prompt." : "Empty field = default prompt."
+          )
+        ]
+      },
+      {
+        type: "group",
+        heading: t("settingsCustomActions"),
+        items: [
+          {
+            name: t("settingsCustomActions"),
+            desc: german ? "Definiere eigene Aktionen mit Emoji, Titel und Prompt. Diese erscheinen im Men\xFC und im Kontextmen\xFC des Editors." : "Define your own actions with emoji, title and prompt. They appear in the menu and the editor context menu.",
+            render: (setting) => {
+              setting.setDesc(
+                german ? "Verwalte die eigenen Aktionen auf der Plugin-Einstellungsseite." : "Manage custom actions on the plugin settings page."
+              );
+            }
+          }
+        ]
+      },
+      {
+        type: "group",
+        heading: t("settingsFreePrompt"),
+        items: [
+          {
+            name: german ? "Freien Prompt im Men\xFC anzeigen" : "Show free prompt in the menu",
+            desc: t("settingsFreePrompt"),
+            control: { type: "toggle", key: "freePromptEnabled", defaultValue: true }
+          }
+        ]
+      }
+    ];
+  }
   display() {
     const { containerEl } = this;
     containerEl.empty();
-    containerEl.createEl("h2", { text: t("settingsHeading") });
-    new import_obsidian3.Setting(containerEl).setName(t("settingsApiUrl")).setDesc(
+    new import_obsidian4.Setting(containerEl).setName(t("settingsHeading")).setHeading();
+    new import_obsidian4.Setting(containerEl).setName(t("settingsApiUrl")).setDesc(
       isGerman() ? "z. B. OpenAI (https://api.openai.com/v1/chat/completions), Ollama (http://localhost:11434/v1/chat/completions) oder LM Studio" : "e.g. OpenAI (https://api.openai.com/v1/chat/completions), Ollama (http://localhost:11434/v1/chat/completions) or LM Studio"
     ).addText((text) => {
       text.setValue(this.plugin.settings.apiUrl).onChange(async (value) => {
@@ -993,7 +1142,7 @@ var LlmTextAssistantSettingTab = class extends import_obsidian3.PluginSettingTab
         await this.plugin.saveSettings();
       });
     });
-    new import_obsidian3.Setting(containerEl).setName(t("settingsApiKey")).setDesc(
+    new import_obsidian4.Setting(containerEl).setName(t("settingsApiKey")).setDesc(
       isGerman() ? "Bei lokalen Endpunkten leer lassen" : "Leave empty for local endpoints"
     ).addText((text) => {
       text.setValue(this.plugin.settings.apiKey).onChange(async (value) => {
@@ -1001,7 +1150,7 @@ var LlmTextAssistantSettingTab = class extends import_obsidian3.PluginSettingTab
         await this.plugin.saveSettings();
       });
     });
-    new import_obsidian3.Setting(containerEl).setName(t("settingsModel")).setDesc(
+    new import_obsidian4.Setting(containerEl).setName(t("settingsModel")).setDesc(
       isGerman() ? "z. B. gpt-4, llama3.1, mistral" : "e.g. gpt-4, llama3.1, mistral"
     ).addText((text) => {
       text.setValue(this.plugin.settings.model).onChange(async (value) => {
@@ -1009,7 +1158,7 @@ var LlmTextAssistantSettingTab = class extends import_obsidian3.PluginSettingTab
         await this.plugin.saveSettings();
       });
     });
-    new import_obsidian3.Setting(containerEl).setName(t("settingsTemperature")).setDesc(
+    new import_obsidian4.Setting(containerEl).setName(t("settingsTemperature")).setDesc(
       isGerman() ? "0 = deterministisch, 2 = sehr kreativ (Standard: 0.3)" : "0 = deterministic, 2 = very creative (default: 0.3)"
     ).addText((text) => {
       text.setValue(this.plugin.settings.temperature).onChange(async (value) => {
@@ -1017,7 +1166,7 @@ var LlmTextAssistantSettingTab = class extends import_obsidian3.PluginSettingTab
         await this.plugin.saveSettings();
       });
     });
-    new import_obsidian3.Setting(containerEl).setName(t("settingsTimeout")).setDesc(
+    new import_obsidian4.Setting(containerEl).setName(t("settingsTimeout")).setDesc(
       isGerman() ? "Maximale Wartezeit pro Anfrage (Standard: 60)" : "Maximum wait time per request (default: 60)"
     ).addText((text) => {
       text.setValue(this.plugin.settings.timeoutSeconds).onChange(async (value) => {
@@ -1025,7 +1174,7 @@ var LlmTextAssistantSettingTab = class extends import_obsidian3.PluginSettingTab
         await this.plugin.saveSettings();
       });
     });
-    new import_obsidian3.Setting(containerEl).setName(t("settingsTargetLanguage")).setDesc(
+    new import_obsidian4.Setting(containerEl).setName(t("settingsTargetLanguage")).setDesc(
       isGerman() ? "Sprache, in die \xFCbersetzt wird, z. B. Englisch, Deutsch, Franz\xF6sisch" : "Language to translate into, e.g. English, German, French"
     ).addText((text) => {
       text.setValue(this.plugin.settings.targetLanguage || t("defaultTargetLanguage")).onChange(async (value) => {
@@ -1033,7 +1182,7 @@ var LlmTextAssistantSettingTab = class extends import_obsidian3.PluginSettingTab
         await this.plugin.saveSettings();
       });
     });
-    containerEl.createEl("h3", { text: t("settingsPrompts") });
+    new import_obsidian4.Setting(containerEl).setName(t("settingsPrompts")).setHeading();
     const promptFields = [
       {
         key: "promptTranslate",
@@ -1045,7 +1194,7 @@ var LlmTextAssistantSettingTab = class extends import_obsidian3.PluginSettingTab
       { key: "promptGrammar", name: t("actionGrammar"), fallback: t("defaultPromptGrammar") }
     ];
     for (const { key, name, fallback } of promptFields) {
-      const setting = new import_obsidian3.Setting(containerEl).setName(name);
+      const setting = new import_obsidian4.Setting(containerEl).setName(name);
       if (key === "promptTranslate") {
         setting.setDesc(
           isGerman() ? "Platzhalter {TARGET_LANGUAGE} wird zur Laufzeit durch die Zielsprache ersetzt. Feld leeren = Standard-Prompt." : "The {TARGET_LANGUAGE} placeholder is replaced with the target language at runtime. Empty field = default prompt."
@@ -1060,19 +1209,21 @@ var LlmTextAssistantSettingTab = class extends import_obsidian3.PluginSettingTab
         text.inputEl.addClass("llmta-settings-textarea");
       });
     }
-    containerEl.createEl("h3", { text: t("settingsCustomActions") });
-    containerEl.createEl("p", {
-      text: isGerman() ? "Definiere eigene Aktionen mit Emoji, Titel und Prompt. Diese erscheinen im Men\xFC und im Kontextmen\xFC des Editors." : "Define your own actions with emoji, title and prompt. They appear in the menu and the editor context menu.",
-      cls: "setting-item-description"
-    });
+    new import_obsidian4.Setting(containerEl).setName(t("settingsCustomActions")).setHeading();
+    new import_obsidian4.Setting(containerEl).setDesc(
+      isGerman() ? "Definiere eigene Aktionen mit Emoji, Titel und Prompt. Diese erscheinen im Men\xFC und im Kontextmen\xFC des Editors." : "Define your own actions with emoji, title and prompt. They appear in the menu and the editor context menu."
+    );
     const renderCustomActions = () => {
       listEl.empty();
       this.plugin.settings.customActions.forEach((action, idx) => {
-        const wrapper = listEl.createEl("div", { cls: "llmta-custom-action" });
-        const row = wrapper.createEl("div", { cls: "llmta-custom-action-row" });
+        const wrapper = listEl.createDiv({ cls: "llmta-custom-action" });
+        const row = wrapper.createDiv({ cls: "llmta-custom-action-row" });
         const emojiInput = row.createEl("input", { type: "text", cls: "llmta-emoji-input" });
         emojiInput.value = action.emoji || "\u26A1";
-        const titleInput = row.createEl("input", { type: "text", placeholder: isGerman() ? "Aktionstitel" : "Action title" });
+        const titleInput = row.createEl("input", {
+          type: "text",
+          placeholder: isGerman() ? "Aktionstitel" : "Action title"
+        });
         titleInput.value = action.title || "";
         const promptArea = wrapper.createEl("textarea", {
           cls: "llmta-prompt-textarea"
@@ -1084,35 +1235,35 @@ var LlmTextAssistantSettingTab = class extends import_obsidian3.PluginSettingTab
           text: isGerman() ? "\u{1F5D1} Entfernen" : "\u{1F5D1} Remove",
           cls: "llmta-remove-btn"
         });
-        const update = async () => {
+        const update = () => {
           this.plugin.settings.customActions[idx] = {
             emoji: emojiInput.value,
             title: titleInput.value,
             prompt: promptArea.value
           };
-          await this.plugin.saveSettings();
+          void this.plugin.saveSettings();
         };
         emojiInput.addEventListener("change", update);
         titleInput.addEventListener("change", update);
         promptArea.addEventListener("change", update);
-        removeBtn.addEventListener("click", async () => {
+        removeBtn.addEventListener("click", () => {
           this.plugin.settings.customActions.splice(idx, 1);
-          await this.plugin.saveSettings();
+          void this.plugin.saveSettings();
           renderCustomActions();
         });
       });
     };
-    const listEl = containerEl.createEl("div");
+    const listEl = containerEl.createDiv();
     renderCustomActions();
-    new import_obsidian3.Setting(containerEl).addButton((btn) => {
-      btn.setButtonText(isGerman() ? "\uFF0B Neue Aktion hinzuf\xFCgen" : "\uFF0B Add new action").onClick(async () => {
+    new import_obsidian4.Setting(containerEl).addButton((btn) => {
+      btn.setButtonText(isGerman() ? "\uFF0B Neue Aktion hinzuf\xFCgen" : "\uFF0B Add new action").onClick(() => {
         this.plugin.settings.customActions.push({ emoji: "\u26A1", title: "", prompt: "" });
-        await this.plugin.saveSettings();
+        void this.plugin.saveSettings();
         renderCustomActions();
       });
     });
-    containerEl.createEl("h3", { text: t("settingsFreePrompt") });
-    new import_obsidian3.Setting(containerEl).setName(
+    new import_obsidian4.Setting(containerEl).setName(t("settingsFreePrompt")).setHeading();
+    new import_obsidian4.Setting(containerEl).setName(
       isGerman() ? "Freien Prompt im Men\xFC anzeigen" : "Show free prompt in the menu"
     ).addToggle((toggle) => {
       toggle.setValue(this.plugin.settings.freePromptEnabled).onChange(async (value) => {

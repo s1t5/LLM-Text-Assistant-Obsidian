@@ -2,60 +2,44 @@
 // (content.js chat UI): iterative instructions with full context, streaming
 // responses, stop button and "Apply" to write the result into the editor.
 
-import { App, Editor, Modal, Notice } from "obsidian";
-import { isGerman, t } from "./i18n";
-import { ChatMessage, LlmClient } from "./llm";
+import { Editor, Modal, Notice } from "obsidian";
+import { t } from "./i18n";
+import type { ChatMessage } from "./llm";
 import { getEditorSelection } from "./main";
 import type LlmTextAssistantPlugin from "./main";
 
 // --- helpers ---
 
 function clipboardWrite(text: string): void {
-	// Obsidian's Electron clipboard is not part of the public typings; use
-	// the web Clipboard API with an execCommand fallback for older setups.
-	if (navigator.clipboard?.writeText) {
-		void navigator.clipboard.writeText(text).catch(() => execCommandCopy(text));
-	} else {
-		execCommandCopy(text);
-	}
-}
-
-function execCommandCopy(text: string): void {
-	const ta = document.createElement("textarea");
-	ta.value = text;
-	ta.style.position = "fixed";
-	ta.style.opacity = "0";
-	document.body.appendChild(ta);
-	ta.select();
-	try {
-		document.execCommand("copy");
-	} catch {
-		// ignore — notice below reflects the best-effort result
-	}
-	ta.remove();
+	// The web Clipboard API is available in Obsidian (desktop and mobile).
+	// The execCommand fallback is intentionally omitted: it is deprecated
+	// and the plugin guidelines discourage its use.
+	void navigator.clipboard.writeText(text).catch(() => {
+		new Notice(t("errorPrefix") + t("errorGeneric"));
+	});
 }
 
 // Bubbles are wrapped so the copy button can float on the assistant bubble.
-function wrapAssistantBubble(bubble: HTMLElement): HTMLElement {
-	const wrapper = document.createElement("div");
-	wrapper.addClass("llmta-bubble-wrap");
-	bubble.parentNode?.insertBefore(wrapper, bubble);
-	wrapper.appendChild(bubble);
-	return wrapper;
+function wrapAssistantBubble(parent: HTMLElement, bubble: HTMLElement): HTMLElement {
+	return parent.createDiv({ cls: "llmta-bubble-wrap" }, (wrapper) => {
+		wrapper.appendChild(bubble);
+	});
 }
 
 function addCopyButton(modal: FreePromptModal, wrapper: HTMLElement, bubble: HTMLElement): void {
-	const btn = wrapper.createEl("button", { cls: "llmta-copy-btn" });
-	btn.setText("⧉");
-	btn.ariaLabel = "Copy";
-	btn.addEventListener("click", (evt) => {
-		evt.stopPropagation();
-		const text = bubble.getText();
-		if (!text.trim()) return;
-		clipboardWrite(text);
-		// Remember as the latest assistant answer for "Apply" / copy-last
-		modal.generatedText = text;
-		modal.markCopied(btn);
+	wrapper.createEl("button", { cls: "llmta-copy-btn" }, (btn) => {
+		btn.type = "button";
+		btn.setText("⧉");
+		btn.ariaLabel = "Copy";
+		btn.addEventListener("click", (evt) => {
+			evt.stopPropagation();
+			const text = bubble.getText();
+			if (!text.trim()) return;
+			clipboardWrite(text);
+			// Remember as the latest assistant answer for "Apply" / copy-last
+			modal.generatedText = text;
+			modal.markCopied(btn);
+		});
 	});
 }
 
@@ -97,31 +81,27 @@ export class FreePromptModal extends Modal {
 		this.messages = this.buildInitialMessages(contextText);
 
 		// --- Chat transcript area ---
-		this.chatEl = this.contentEl.createEl("div", { cls: "llmta-chat-log" });
+		this.chatEl = this.contentEl.createDiv({ cls: "llmta-chat-log" });
 		this.addBubble("system", contextText ? t("chatWelcomeWithContext") : t("chatWelcomeNoContext"));
 
 		// --- Status line (streaming indicator) ---
-		this.statusEl = this.contentEl.createEl("div", { cls: "llmta-chat-status" });
-		this.statusEl.style.display = "none";
+		this.statusEl = this.contentEl.createDiv({ cls: "llmta-chat-status is-hidden" });
 
 		// --- Input row ---
-		const inputRow = this.contentEl.createEl("div", { cls: "llmta-chat-input-row" });
-		this.inputEl = inputRow.createEl("textarea", {
-			cls: "llmta-chat-input",
-		});
+		const inputRow = this.contentEl.createDiv({ cls: "llmta-chat-input-row" });
+		this.inputEl = inputRow.createEl("textarea", { cls: "llmta-chat-input" });
 		this.inputEl.placeholder = t("chatInputPlaceholder");
 		this.inputEl.rows = 2;
 
-		const btnCol = inputRow.createEl("div", { cls: "llmta-chat-buttons" });
+		const btnCol = inputRow.createDiv({ cls: "llmta-chat-buttons" });
 		this.sendBtn = btnCol.createEl("button", {
 			text: t("chatSend"),
 			cls: "mod-cta llmta-chat-send",
 		});
 		this.stopBtn = btnCol.createEl("button", {
 			text: t("chatStop"),
-			cls: "llmta-chat-stop",
+			cls: "llmta-chat-stop is-hidden",
 		});
-		this.stopBtn.style.display = "none";
 
 		this.sendBtn.addEventListener("click", () => this.handleSend());
 		this.stopBtn.addEventListener("click", () => this.stopStreaming());
@@ -133,8 +113,8 @@ export class FreePromptModal extends Modal {
 			}
 		});
 
-		// --- Footer with Copy / Apply / Reset ---
-		const footer = this.contentEl.createEl("div", { cls: "llmta-chat-footer" });
+		// --- Footer with Apply / Copy / Reset ---
+		const footer = this.contentEl.createDiv({ cls: "llmta-chat-footer" });
 		this.applyBtn = footer.createEl("button", {
 			text: t("chatApply"),
 			cls: "mod-cta",
@@ -185,21 +165,17 @@ export class FreePromptModal extends Modal {
 		return [{ role: "system", content: systemContent }];
 	}
 
-	// A small system bubble (welcome/reset notice) — no copy button.
-	private addSystemBubble(text: string): void {
-		this.chatEl.createEl("div", { cls: "llmta-bubble llmta-bubble-system" }).setText(text);
-	}
-
 	private addBubble(role: "user" | "system" | "assistant", text: string): HTMLElement {
-		const bubble = this.chatEl.createEl("div", { cls: `llmta-bubble llmta-bubble-${role}` });
+		const bubble = this.chatEl.createDiv({ cls: `llmta-bubble llmta-bubble-${role}` });
 		bubble.setText(text);
 		return bubble;
 	}
 
 	// Assistant bubbles get a floating copy button (wrapped for positioning).
 	private addAssistantBubble(): HTMLElement {
-		const bubble = this.chatEl.createEl("div", { cls: "llmta-bubble llmta-bubble-assistant" });
-		const wrapper = wrapAssistantBubble(bubble);
+		const holder = this.chatEl.createDiv({ cls: "llmta-bubble-holder" });
+		const bubble = holder.createDiv({ cls: "llmta-bubble llmta-bubble-assistant" });
+		const wrapper = wrapAssistantBubble(holder, bubble);
 		addCopyButton(this, wrapper, bubble);
 		return bubble;
 	}
@@ -216,13 +192,13 @@ export class FreePromptModal extends Modal {
 	markCopied(btn: HTMLButtonElement): void {
 		const prev = btn.getText();
 		btn.setText("✓");
-		setTimeout(() => btn.setText(prev), 1500);
+		window.setTimeout(() => btn.setText(prev), 1500);
 	}
 
 	private setGenerating(generating: boolean) {
-		this.sendBtn.style.display = generating ? "none" : "";
-		this.stopBtn.style.display = generating ? "" : "none";
-		this.statusEl.style.display = generating ? "" : "none";
+		this.sendBtn.toggleClass("is-hidden", generating);
+		this.stopBtn.toggleClass("is-hidden", !generating);
+		this.statusEl.toggleClass("is-hidden", !generating);
 		if (generating) {
 			this.statusEl.setText(t("chatGenerating"));
 		}
@@ -244,7 +220,7 @@ export class FreePromptModal extends Modal {
 		this.abortController = new AbortController();
 		const client = this.plugin.getClient();
 
-		client.streamChat(this.messages, this.abortController.signal, {
+		void client.streamChat(this.messages, this.abortController.signal, {
 			onToken: (token) => {
 				if (first) {
 					bubble.setText(token);

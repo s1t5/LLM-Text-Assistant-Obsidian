@@ -90,6 +90,11 @@
 	margin-left: auto;
 }
 
+/* --- Chat helpers --- */
+.llmta-chat-modal .is-hidden {
+	display: none;
+}
+
 /* --- Assistant bubble copy button --- */
 .llmta-bubble-wrap {
 	position: relative;

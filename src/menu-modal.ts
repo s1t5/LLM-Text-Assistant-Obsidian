@@ -2,7 +2,7 @@
 // extension's floating icon menu. Lists built-in actions, custom actions and
 // (if enabled) the free prompt entry.
 
-import { App, Editor, FuzzySuggestModal } from "obsidian";
+import { Editor, FuzzySuggestModal } from "obsidian";
 import { t } from "./i18n";
 import LlmTextAssistantPlugin, { BUILTIN_ACTION_IDS, getActionTitle } from "./main";
 
@@ -41,6 +41,6 @@ export class ActionMenuModal extends FuzzySuggestModal<string> {
 			this.plugin.openFreePrompt(this.editor);
 			return;
 		}
-		this.plugin.runAction(this.editor, item);
+		void this.plugin.runAction(this.editor, item);
 	}
 }

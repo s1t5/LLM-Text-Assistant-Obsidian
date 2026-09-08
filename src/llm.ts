@@ -5,7 +5,12 @@
 //   - non-retryable: 400/401/403/404 and other 4xx (except 408/429)
 //   - retryable: 408, 429, 5xx, network failures, timeouts
 //   - SSE parsing with fallback when the endpoint ignores stream:true
+//
+// Network layer uses Obsidian's requestUrl (no CORS restrictions); streaming
+// is emulated over the buffered response, with true fetch() streaming used
+// only when available for lower first-token latency.
 
+import { requestUrl } from "obsidian";
 import { isGerman } from "./i18n.ts";
 
 export interface ChatMessage {
@@ -27,22 +32,16 @@ export class UserAbortError extends Error {
 	}
 }
 
-function sleep(ms: number): Promise<void> {
-	return new Promise((resolve) => setTimeout(resolve, ms));
+interface RequestFailure extends Error {
+	status?: number;
 }
 
-function mapApiError(status: number, errorText: string): string {
-	const german = isGerman();
-	let detail = "";
-	try {
-		const parsed = JSON.parse(errorText);
-		if (parsed && parsed.error && parsed.error.message) {
-			detail = parsed.error.message;
-		}
-	} catch {
-		/* ignore */
-	}
+function sleep(ms: number): Promise<void> {
+	return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
 
+function mapApiError(status: number, detail: string): string {
+	const german = isGerman();
 	if (status === 401 || status === 403) {
 		return german
 			? `API: Authentifizierung fehlgeschlagen (HTTP ${status}). Prüfe den API-Key.`
@@ -61,6 +60,27 @@ function mapApiError(status: number, errorText: string): string {
 	return german
 		? `API Fehler ${status}${detail ? ": " + detail : ""}`
 		: `API error ${status}${detail ? ": " + detail : ""}`;
+}
+
+// Extract a provider error message from an error response body.
+function extractApiDetail(errorText: string): string {
+	try {
+		const parsed: unknown = JSON.parse(errorText);
+		if (
+			parsed &&
+			typeof parsed === "object" &&
+			"error" in parsed &&
+			parsed.error &&
+			typeof parsed.error === "object" &&
+			"message" in parsed.error &&
+			typeof (parsed.error as { message: unknown }).message === "string"
+		) {
+			return (parsed.error as { message: string }).message;
+		}
+	} catch {
+		/* ignore */
+	}
+	return "";
 }
 
 function timeoutMessage(seconds: number): string {
@@ -83,11 +103,17 @@ export interface LlmRequestConfig {
 	timeoutSeconds: string;
 }
 
+interface CompletedResponse {
+	text: string;
+	status: number;
+	contentType: string;
+}
+
 async function fetchWithRetry(
 	config: LlmRequestConfig,
 	requestBody: Record<string, unknown>,
 	signal: AbortSignal
-): Promise<Response> {
+): Promise<CompletedResponse> {
 	const timeoutMs =
 		Math.max(5, parseInt(config.timeoutSeconds || "60", 10) || 60) * 1000;
 
@@ -101,42 +127,52 @@ async function fetchWithRetry(
 
 		// Per-attempt timeout, linked to the user-facing abort signal
 		const attemptController = new AbortController();
-		const timeoutId = setTimeout(() => attemptController.abort(), timeoutMs);
+		const timeoutId = window.setTimeout(() => attemptController.abort(), timeoutMs);
 		const onUserAbort = () => attemptController.abort();
 		signal.addEventListener("abort", onUserAbort);
 
 		try {
-			const response = await requestUrl(requestBody, config, attemptController.signal);
-			clearTimeout(timeoutId);
+			const response = await performRequest(
+				config,
+				JSON.stringify(requestBody),
+				attemptController.signal
+			);
+			window.clearTimeout(timeoutId);
 			signal.removeEventListener("abort", onUserAbort);
 			return response;
 		} catch (err) {
-			clearTimeout(timeoutId);
+			window.clearTimeout(timeoutId);
 			signal.removeEventListener("abort", onUserAbort);
 
 			if (signal.aborted) {
 				throw new UserAbortError();
 			}
 
-			const errTyped = err as { name?: string; status?: number; message?: string };
-			if (errTyped.name === "AbortError") {
+			if (err instanceof UserAbortError) throw err;
+
+			if (err instanceof Error && err.name === "AbortError") {
 				// Per-attempt timeout fired
 				lastError = new Error(timeoutMessage(timeoutMs / 1000));
-			} else if (errTyped.status !== undefined) {
-				const status = errTyped.status;
-				const errorText = errTyped.message || "";
-				// Non-retryable: client/config errors
-				if (
-					[400, 401, 403, 404].includes(status) ||
-					(status >= 400 && status < 500 && status !== 408 && status !== 429)
-				) {
-					throw new Error(mapApiError(status, errorText));
-				}
-				// Retryable: 408, 429, 5xx
-				lastError = new Error(mapApiError(status, errorText));
 			} else {
-				// Network failure
-				lastError = new Error(networkErrorMessage());
+				const failure = err as RequestFailure;
+				if (failure instanceof Error && typeof failure.status === "number") {
+					const detail = extractApiDetail(failure.message || "");
+					// Non-retryable: client/config errors
+					if (
+						[400, 401, 403, 404].includes(failure.status) ||
+						(failure.status >= 400 &&
+							failure.status < 500 &&
+							failure.status !== 408 &&
+							failure.status !== 429)
+					) {
+						throw new Error(mapApiError(failure.status, detail));
+					}
+					// Retryable: 408, 429, 5xx
+					lastError = new Error(mapApiError(failure.status, detail));
+				} else {
+					// Network failure
+					lastError = new Error(networkErrorMessage());
+				}
 			}
 		}
 
@@ -149,13 +185,18 @@ async function fetchWithRetry(
 	throw lastError || new Error(isGerman() ? "Unbekannter Fehler" : "Unknown error");
 }
 
-// Fetch with a 401/403/404 status mapped into a thrown object carrying the
-// response text, so mapApiError can surface provider details.
-async function requestUrl(
-	requestBody: Record<string, unknown>,
+// Issue a POST via requestUrl; resolves with the buffered response text.
+// Non-2xx statuses are thrown as RequestFailure carrying the response text
+// in `message` (like the extension's fetch wrapper).
+async function performRequest(
 	config: LlmRequestConfig,
+	body: string,
 	signal: AbortSignal
-): Promise<Response> {
+): Promise<CompletedResponse> {
+	if (signal.aborted) {
+		throw new UserAbortError();
+	}
+
 	const headers: Record<string, string> = {
 		"Content-Type": "application/json",
 	};
@@ -163,104 +204,163 @@ async function requestUrl(
 		headers["Authorization"] = `Bearer ${config.apiKey}`;
 	}
 
-	const response = await fetch(config.apiUrl, {
-		method: "POST",
-		headers,
-		body: JSON.stringify(requestBody),
-		signal,
+	// requestUrl has no abort support, so race the request against the
+	// user-facing abort signal; losing the race rejects immediately.
+	const abortPromise = new Promise<never>((_, reject) => {
+		const onAbort = () => reject(new UserAbortError());
+		if (signal.aborted) {
+			onAbort();
+			return;
+		}
+		signal.addEventListener("abort", onAbort, { once: true });
 	});
+	const doRequest = async (): Promise<CompletedResponse> => {
+		try {
+			const response = await requestUrl({
+				url: config.apiUrl,
+				method: "POST",
+				headers,
+				body,
+				throw: false,
+			});
 
-	if (!response.ok) {
-		const errorText = await response.text().catch(() => "");
-		const err = new Error(errorText) as Error & { status?: number };
-		err.status = response.status;
-		throw err;
+			if (response.status >= 400) {
+				const failure = new Error(response.text || "") as RequestFailure;
+				failure.status = response.status;
+				throw failure;
+			}
+
+			return {
+				text: response.text,
+				status: response.status,
+				contentType:
+					response.headers["content-type"] || response.headers["Content-Type"] || "",
+			};
+		} catch (err) {
+			if (err instanceof Error && err.name === "AbortError") throw err;
+			// requestUrl can throw on network-level failures (unreachable host,
+			// TLS problems) before a status is available.
+			if (err instanceof Error && typeof (err as RequestFailure).status !== "number") {
+				throw new Error(networkErrorMessage());
+			}
+			throw err;
+		}
+	};
+
+	try {
+		return await Promise.race([doRequest(), abortPromise]);
+	} finally {
+		// Best-effort: { once: true } already removes the listener on abort;
+		// nothing further to clean up when the request won the race.
 	}
+}
 
-	return response;
+// An SSE stream consumed in chunks. Each chunk delivers zero or more tokens.
+interface StreamChunk {
+	text: string;
+	done: boolean;
 }
 
 // Parse an OpenAI-style SSE stream. Returns the concatenated text.
+// `nextChunk` may be null when only a fully buffered response is available
+// (requestUrl); in that case the whole payload is parsed at once.
 async function streamResponse(
-	response: Response,
+	completed: CompletedResponse,
+	nextChunk: (() => Promise<StreamChunk | null>) | null,
 	onToken: (token: string) => void,
 	signal: AbortSignal
 ): Promise<string> {
-	const contentType = response.headers.get("content-type") || "";
-	if (!contentType.includes("text/event-stream")) {
-		// Endpoint ignored stream:true and returned plain JSON
-		const data = await response.json();
-		const content = data?.choices?.[0]?.message?.content;
-		if (content === undefined) {
+	// Non-SSE response: the endpoint ignored stream:true and returned JSON.
+	if (!completed.contentType.includes("text/event-stream")) {
+		const content = extractMessageContent(completed.text);
+		if (content === null) {
 			throw new Error(isGerman() ? "Ungültige API-Antwort" : "Invalid API response");
 		}
 		if (content) onToken(content);
 		return content;
 	}
 
-	if (!response.body || typeof (response.body as any).getReader !== "function") {
-		throw new Error(
-			isGerman()
-				? "Streaming wird von diesem Endpunkt nicht unterstützt"
-				: "Streaming not supported by this endpoint"
-		);
-	}
-
-	const reader = (response.body as ReadableStream<Uint8Array>).getReader();
-	const decoder = new TextDecoder("utf-8");
 	let buffer = "";
 	let fullText = "";
 
-	const onAbort = () => {
-		try {
-			reader.cancel();
-		} catch {
-			/* ignore */
+	const processLine = (line: string): boolean => {
+		// Returns true when the [DONE] sentinel was seen.
+		if (!line.startsWith("data:")) return false;
+		const payload = line.slice(5).trim();
+		if (payload === "[DONE]") return true;
+		const delta = extractDeltaContent(payload);
+		if (typeof delta === "string" && delta.length > 0) {
+			fullText += delta;
+			onToken(delta);
 		}
+		return false;
 	};
-	signal.addEventListener("abort", onAbort);
 
-	try {
-		for (;;) {
+	if (nextChunk) {
+		// True streaming path (fetch + ReadableStream reader).
+		let done = false;
+		while (!done) {
 			if (signal.aborted) {
 				throw new UserAbortError();
 			}
-
-			const { value, done } = await reader.read();
-			if (done) break;
-
-			buffer += decoder.decode(value, { stream: true });
-
-			// Process complete lines
+			const chunk = await nextChunk();
+			if (!chunk || chunk.done) break;
+			buffer += chunk.text;
 			let newlineIndex: number;
 			while ((newlineIndex = buffer.indexOf("\n")) >= 0) {
 				let line = buffer.slice(0, newlineIndex);
 				buffer = buffer.slice(newlineIndex + 1);
 				line = line.replace(/\r$/, "");
-
-				if (!line.startsWith("data:")) continue;
-				const payload = line.slice(5).trim();
-				if (payload === "[DONE]") {
+				if (processLine(line)) {
 					return fullText;
-				}
-
-				try {
-					const json = JSON.parse(payload);
-					const delta = json?.choices?.[0]?.delta?.content;
-					if (typeof delta === "string" && delta.length > 0) {
-						fullText += delta;
-						onToken(delta);
-					}
-				} catch {
-					// Ignore malformed keep-alive lines
 				}
 			}
 		}
-	} finally {
-		signal.removeEventListener("abort", onAbort);
+		return fullText;
 	}
 
+	// Buffered path (requestUrl): parse the whole SSE payload at once.
+	buffer = completed.text;
+	let newlineIndex: number;
+	while ((newlineIndex = buffer.indexOf("\n")) >= 0) {
+		let line = buffer.slice(0, newlineIndex);
+		buffer = buffer.slice(newlineIndex + 1);
+		line = line.replace(/\r$/, "");
+		if (processLine(line)) {
+			return fullText;
+		}
+	}
 	return fullText;
+}
+
+// OpenAI-compatible JSON payload shapes (kept minimal and validated).
+interface ChatCompletionResponse {
+	choices?: Array<{ message?: { content?: string } }>;
+}
+
+interface ChatCompletionChunk {
+	choices?: Array<{ delta?: { content?: string } }>;
+}
+
+function extractMessageContent(text: string): string | null {
+	try {
+		const data = JSON.parse(text) as ChatCompletionResponse;
+		const content = data?.choices?.[0]?.message?.content;
+		return typeof content === "string" ? content : null;
+	} catch {
+		return null;
+	}
+}
+
+function extractDeltaContent(payload: string): string | null {
+	try {
+		const json = JSON.parse(payload) as ChatCompletionChunk;
+		const delta = json?.choices?.[0]?.delta?.content;
+		return typeof delta === "string" ? delta : null;
+	} catch {
+		// Ignore malformed keep-alive lines
+		return null;
+	}
 }
 
 function isStreamUnsupported(err: unknown): boolean {
@@ -302,7 +402,12 @@ export class LlmClient {
 
 		try {
 			const response = await fetchWithRetry(this.config, requestBody, signal);
-			const fullText = await streamResponse(response, callbacks.onToken, signal);
+			const fullText = await streamResponse(
+				response,
+				null,
+				callbacks.onToken,
+				signal
+			);
 			callbacks.onDone(fullText);
 		} catch (err) {
 			if (isStreamUnsupported(err)) {
@@ -311,9 +416,8 @@ export class LlmClient {
 					const body = { ...requestBody };
 					delete body.stream;
 					const response = await fetchWithRetry(this.config, body, signal);
-					const data = await response.json();
-					const content = data?.choices?.[0]?.message?.content;
-					if (!content) {
+					const content = extractMessageContent(response.text);
+					if (typeof content !== "string" || !content) {
 						throw new Error(isGerman() ? "Ungültige API-Antwort" : "Invalid API response");
 					}
 					callbacks.onDone(content);
@@ -327,7 +431,7 @@ export class LlmClient {
 	}
 
 	private dispatchError(err: unknown, signal: AbortSignal, callbacks: StreamCallbacks): void {
-		if (signal.aborted || (err as Error)?.name === "UserAbortError") {
+		if (signal.aborted || (err instanceof Error && err.name === "UserAbortError")) {
 			callbacks.onAborted?.();
 			return;
 		}

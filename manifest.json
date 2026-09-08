@@ -1,7 +1,7 @@
 {
   "id": "llm-text-assistant",
   "name": "LLM Text Assistant",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "minAppVersion": "1.4.0",
   "description": "Process, translate and refine selected text with any OpenAI-compatible LLM directly in the editor.",
   "author": "s1t5",
