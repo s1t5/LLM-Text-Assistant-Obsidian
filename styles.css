@@ -1,0 +1,116 @@
+/* Styles for the LLM Text Assistant Obsidian plugin */
+
+/* --- Undo toast --- */
+.llmta-undo-toast {
+	display: flex;
+	align-items: center;
+	gap: 12px;
+}
+
+.llmta-undo-toast button {
+	margin-left: auto;
+}
+
+/* --- Free prompt chat modal --- */
+.llmta-chat-modal .modal {
+	height: 70vh;
+	display: flex;
+	flex-direction: column;
+}
+
+.llmta-chat-modal .modal-content {
+	flex: 1;
+	display: flex;
+	flex-direction: column;
+	overflow: hidden;
+}
+
+.llmta-chat-log {
+	flex: 1;
+	overflow-y: auto;
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+	padding: 4px 0;
+	min-height: 120px;
+}
+
+.llmta-bubble {
+	max-width: 85%;
+	padding: 8px 12px;
+	border-radius: 10px;
+	white-space: pre-wrap;
+	word-break: break-word;
+}
+
+.llmta-bubble-user {
+	align-self: flex-end;
+	background: var(--interactive-accent);
+	color: var(--text-on-accent);
+}
+
+.llmta-bubble-assistant,
+.llmta-bubble-system {
+	align-self: flex-start;
+	background: var(--background-secondary);
+	color: var(--text-normal);
+}
+
+.llmta-chat-status {
+	color: var(--text-muted);
+	font-size: var(--font-ui-smaller);
+	padding: 4px 0;
+}
+
+.llmta-chat-input-row {
+	display: flex;
+	gap: 8px;
+	margin-top: 8px;
+	align-items: stretch;
+}
+
+.llmta-chat-input {
+	flex: 1;
+	resize: none;
+}
+
+.llmta-chat-buttons {
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+}
+
+.llmta-chat-footer {
+	display: flex;
+	justify-content: space-between;
+	margin-top: 10px;
+}
+
+/* --- Settings: custom actions --- */
+.llmta-custom-action {
+	border: 1px solid var(--background-modifier-border);
+	border-radius: 8px;
+	padding: 10px;
+	margin-bottom: 10px;
+}
+
+.llmta-custom-action-row {
+	display: grid;
+	grid-template-columns: 64px 1fr auto;
+	gap: 8px;
+	margin-bottom: 8px;
+	align-items: center;
+}
+
+.llmta-emoji-input {
+	width: 64px;
+}
+
+.llmta-prompt-textarea {
+	width: 100%;
+	resize: vertical;
+}
+
+.llmta-remove-btn {
+	align-self: start;
+}
