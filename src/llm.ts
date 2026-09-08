@@ -73,9 +73,9 @@ function extractApiDetail(errorText: string): string {
 			parsed.error &&
 			typeof parsed.error === "object" &&
 			"message" in parsed.error &&
-			typeof (parsed.error as { message: unknown }).message === "string"
+			typeof parsed.error.message === "string"
 		) {
-			return (parsed.error as { message: string }).message;
+			return parsed.error.message;
 		}
 	} catch {
 		/* ignore */

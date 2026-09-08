@@ -260,7 +260,8 @@ export default class LlmTextAssistantPlugin extends Plugin {
 	}
 
 	async loadSettings() {
-		this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
+		const stored = (await this.loadData()) as Partial<LlmTextAssistantSettings> | null;
+		this.settings = { ...DEFAULT_SETTINGS, ...(stored ?? {}) };
 		if (!Array.isArray(this.settings.customActions)) {
 			this.settings.customActions = [];
 		}
@@ -297,7 +298,7 @@ export default class LlmTextAssistantPlugin extends Plugin {
 		for (const actionId of BUILTIN_ACTION_IDS) {
 			menu.addItem((item) =>
 				item.setTitle(getActionTitle(actionId, this.settings)).setIcon("sparkles").onClick(() => {
-					this.runAction(editor, actionId);
+					void this.runAction(editor, actionId);
 				})
 			);
 		}
@@ -305,7 +306,7 @@ export default class LlmTextAssistantPlugin extends Plugin {
 			if (action.title && action.title.trim()) {
 				menu.addItem((item) =>
 					item.setTitle(getActionTitle(`custom_${idx}`, this.settings)).onClick(() => {
-						this.runAction(editor, `custom_${idx}`);
+						void this.runAction(editor, `custom_${idx}`);
 					})
 				);
 			}

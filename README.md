@@ -41,7 +41,7 @@ This is the **Obsidian edition** of LLM Text Assistant — the browser extension
 ## 🚀 Quick Start
 
 ### Prerequisites
-- [Obsidian](https://obsidian.md) 1.4.0 or newer (Restricted Mode off for community plugins)
+- [Obsidian](https://obsidian.md) 1.8.7 or newer (Restricted Mode off for community plugins)
 - An OpenAI-compatible API endpoint (cloud or local)
 
 ### 🛠️ Installation

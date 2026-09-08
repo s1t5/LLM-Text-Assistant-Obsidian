@@ -889,7 +889,8 @@ var LlmTextAssistantPlugin2 = class extends import_obsidian4.Plugin {
     );
   }
   async loadSettings() {
-    this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
+    const stored = await this.loadData();
+    this.settings = { ...DEFAULT_SETTINGS, ...stored != null ? stored : {} };
     if (!Array.isArray(this.settings.customActions)) {
       this.settings.customActions = [];
     }
@@ -922,7 +923,7 @@ var LlmTextAssistantPlugin2 = class extends import_obsidian4.Plugin {
     for (const actionId of BUILTIN_ACTION_IDS) {
       menu.addItem(
         (item) => item.setTitle(getActionTitle(actionId, this.settings)).setIcon("sparkles").onClick(() => {
-          this.runAction(editor, actionId);
+          void this.runAction(editor, actionId);
         })
       );
     }
@@ -930,7 +931,7 @@ var LlmTextAssistantPlugin2 = class extends import_obsidian4.Plugin {
       if (action.title && action.title.trim()) {
         menu.addItem(
           (item) => item.setTitle(getActionTitle(`custom_${idx}`, this.settings)).onClick(() => {
-            this.runAction(editor, `custom_${idx}`);
+            void this.runAction(editor, `custom_${idx}`);
           })
         );
       }
