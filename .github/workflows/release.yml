@@ -106,4 +106,18 @@ jobs:
             --target="$GITHUB_SHA" \
             --generate-notes \
             main.js manifest.json styles.css
-          echo "Release $VERSION published."
+
+      - name: Ensure release is published (not a draft)
+        if: steps.version.outputs.changed == 'true'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          # Safety net: if the release ended up as a draft for any reason
+          # (gh edge cases with --target/asset uploads, repo state), publish
+          # it explicitly so Obsidian users receive the update immediately.
+          if [ "$(gh release view "$VERSION" --json isDraft -q .isDraft)" = "true" ]; then
+            echo "Release $VERSION was created as a draft — publishing it now."
+            gh release edit "$VERSION" --draft=false
+          fi
+          echo "Release $VERSION isDraft: $(gh release view "$VERSION" --json isDraft -q .isDraft)"
