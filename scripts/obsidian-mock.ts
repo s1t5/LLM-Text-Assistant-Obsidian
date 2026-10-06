@@ -10,7 +10,10 @@ interface MockResponse {
 }
 
 // biome-ignore lint/suspicious/noExplicitAny: test scaffold
-type Handler = (body: Record<string, unknown>) => MockResponse | Promise<MockResponse>;
+type Handler = (
+	body: Record<string, unknown>,
+	meta: { url: string; method: string; headers: Record<string, string> }
+) => MockResponse | Promise<MockResponse>;
 
 function getHandler(): Handler | null {
 	// biome-ignore lint/suspicious/noExplicitAny: test scaffold
@@ -37,7 +40,11 @@ export function requestUrl(param: {
 	} catch {
 		body = {};
 	}
-	const result = handler(body);
+	const result = handler(body, {
+		url: param.url,
+		method: param.method || "GET",
+		headers: param.headers || {},
+	});
 	const response = result instanceof Promise ? result : Promise.resolve(result);
 	return response.then((res) => ({
 		status: res.status,

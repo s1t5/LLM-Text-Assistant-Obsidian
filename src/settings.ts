@@ -21,6 +21,12 @@ export interface LlmTextAssistantSettings {
 	promptGrammar: string;
 	customActions: CustomAction[];
 	freePromptEnabled: boolean;
+	// v1.1.0 — mirrors the browser extension's v1.6.0 settings.
+	// Note context: title/path/surroundings for the free-prompt chat.
+	contextEnabled: boolean;
+	contextChars: string;
+	// Show an old→new diff after every action and only write on confirmation.
+	confirmBeforeReplace: boolean;
 }
 
 export const DEFAULT_SETTINGS: LlmTextAssistantSettings = {
@@ -36,4 +42,7 @@ export const DEFAULT_SETTINGS: LlmTextAssistantSettings = {
 	promptGrammar: "",
 	customActions: [],
 	freePromptEnabled: true,
+	contextEnabled: false,
+	contextChars: "600",
+	confirmBeforeReplace: false,
 };

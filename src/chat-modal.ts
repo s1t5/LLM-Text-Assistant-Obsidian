@@ -3,10 +3,22 @@
 // responses, stop button and "Apply" to write the result into the editor.
 
 import { Editor, Modal, Notice } from "obsidian";
-import { t } from "./i18n";
+import { I18nKey, t } from "./i18n";
 import type { ChatMessage } from "./llm";
 import { getEditorSelection } from "./main";
 import type LlmTextAssistantPlugin from "./main";
+import { DiffConfirmModal } from "./diff-modal";
+
+// Preset prompt chips (v1.1.0, ported from the extension's CHAT_PRESETS).
+// One click drops a ready-made instruction into the input field — never
+// auto-sends, the user stays in control. Labels AND prompts are localized
+// (the extension localizes the labels only).
+const CHAT_PRESETS: Array<{ labelKey: I18nKey; promptKey: I18nKey }> = [
+	{ labelKey: "chatPresetShorter", promptKey: "chatPresetPromptShorter" },
+	{ labelKey: "chatPresetFormal", promptKey: "chatPresetPromptFormal" },
+	{ labelKey: "chatPresetEmail", promptKey: "chatPresetPromptEmail" },
+	{ labelKey: "chatPresetBullets", promptKey: "chatPresetPromptBullets" },
+];
 
 // --- helpers ---
 
@@ -62,6 +74,9 @@ export class FreePromptModal extends Modal {
 	private resetBtn!: HTMLButtonElement;
 	private statusEl!: HTMLElement;
 	private isModalOpen = false;
+	// Note context for this chat session (v1.1.0)
+	private contextEnabled = false;
+	private contextText = "";
 	private boundKeydown: ((evt: KeyboardEvent) => void) | null = null;
 
 	constructor(plugin: LlmTextAssistantPlugin, editor: Editor) {
@@ -75,6 +90,13 @@ export class FreePromptModal extends Modal {
 		this.contentEl.addClass("llmta-chat-modal");
 		this.titleEl.setText(t("chatTitle"));
 
+		// Note context (v1.1.0): title, vault path and the text around the
+		// selection. Seeded from the setting; the checkbox in the header
+		// toggles it for this chat session only (same as the extension).
+		this.contextEnabled = this.plugin.settings.contextEnabled === true;
+		this.refreshContextText();
+		this.addContextToggle();
+
 		// Load the editor selection as initial context (if any)
 		const sel = getEditorSelection(this.editor);
 		const contextText = sel.text.trim() ? sel.text : "";
@@ -86,6 +108,9 @@ export class FreePromptModal extends Modal {
 
 		// --- Status line (streaming indicator) ---
 		this.statusEl = this.contentEl.createDiv({ cls: "llmta-chat-status is-hidden" });
+
+		// --- Preset chips ---
+		this.contentEl.appendChild(this.createPresets());
 
 		// --- Input row ---
 		const inputRow = this.contentEl.createDiv({ cls: "llmta-chat-input-row" });
@@ -162,7 +187,56 @@ export class FreePromptModal extends Modal {
 			systemContent +=
 				"\n\n" + t("freePromptContextIntro") + "\n\n---\n" + contextText + "\n---";
 		}
+		// Note context is additive and clearly labelled as background
+		// information so the model does not treat the note text as the task.
+		if (this.contextEnabled && this.contextText.trim()) {
+			systemContent +=
+				"\n\n" + t("contextIntroLabel") + "\n\n---\n" + this.contextText + "\n---";
+		}
 		return [{ role: "system", content: systemContent }];
+	}
+
+	// Recompute the note context (title, path, surroundings) for the current
+	// editor state. Mirrors setChatContextEnabled in content.js: the system
+	// message is rebuilt, the visible transcript stays.
+	private refreshContextText(): void {
+		this.contextText = this.contextEnabled
+			? this.plugin.collectContextFor(this.editor)
+			: "";
+	}
+
+	// Header checkbox — per-session switch, seeded from the setting.
+	private addContextToggle(): void {
+		const wrap = this.titleEl.createEl("label", { cls: "llmta-chat-context" });
+		const toggle = wrap.createEl("input", { type: "checkbox" });
+		toggle.checked = this.contextEnabled;
+		toggle.addEventListener("change", () => {
+			this.contextEnabled = toggle.checked;
+			this.refreshContextText();
+			const sel = getEditorSelection(this.editor);
+			this.messages = this.buildInitialMessages(sel.text.trim() ? sel.text : "");
+		});
+		wrap.createSpan({ text: t("chatContextToggle") });
+	}
+
+	// Preset chips: one click drops a ready-made instruction into the input.
+	private createPresets(): HTMLElement {
+		const wrap = this.contentEl.createDiv({ cls: "llmta-chat-presets" });
+		wrap.createSpan({ cls: "llmta-chat-presets-label", text: t("chatPresetsLabel") });
+		for (const preset of CHAT_PRESETS) {
+			const chip = wrap.createEl("button", {
+				cls: "llmta-chat-preset",
+				text: t(preset.labelKey),
+			});
+			chip.type = "button";
+			chip.addEventListener("click", (evt) => {
+				evt.preventDefault();
+				// Drop the instruction into the input; the user reviews and sends.
+				this.inputEl.value = t(preset.promptKey);
+				this.inputEl.focus();
+			});
+		}
+		return wrap;
 	}
 
 	private addBubble(role: "user" | "system" | "assistant", text: string): HTMLElement {
@@ -264,12 +338,26 @@ export class FreePromptModal extends Modal {
 			return;
 		}
 		const sel = getEditorSelection(this.editor);
-		if (sel.isSelection) {
-			this.editor.replaceRange(this.generatedText, sel.from, sel.to);
-		} else {
-			this.editor.replaceRange(this.generatedText, sel.from, sel.from);
+		const write = () => {
+			if (sel.isSelection) {
+				this.editor.replaceRange(this.generatedText, sel.from, sel.to);
+			} else {
+				this.editor.replaceRange(this.generatedText, sel.from, sel.from);
+			}
+			this.close();
+		};
+
+		// "Confirm result before replacing": show the old→new comparison and
+		// only write after the user applies it. Discarding leaves the editor
+		// untouched and the chat window open.
+		if (this.plugin.settings.confirmBeforeReplace) {
+			new DiffConfirmModal(this.app, sel.isSelection ? sel.text : "", this.generatedText, {
+				onApply: write,
+				onDiscard: () => {},
+			}).open();
+			return;
 		}
-		this.close();
+		write();
 	}
 
 	private handleReset() {

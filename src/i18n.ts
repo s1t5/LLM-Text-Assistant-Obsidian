@@ -53,6 +53,32 @@ export type I18nKey =
 	| "settingsPrompts"
 	| "settingsCustomActions"
 	| "settingsFreePrompt"
+	| "settingsModelLoad"
+	| "settingsModelsLoading"
+	| "settingsModelsLoaded"
+	| "settingsModelsError"
+	| "settingsModelsNeedUrl"
+	| "settingsContextToggle"
+	| "settingsContextDesc"
+	| "settingsContextChars"
+	| "settingsContextCharsHint"
+	| "settingsConfirmToggle"
+	| "settingsConfirmDesc"
+	| "chatContextToggle"
+	| "chatPresetsLabel"
+	| "chatPresetShorter"
+	| "chatPresetFormal"
+	| "chatPresetEmail"
+	| "chatPresetBullets"
+	| "chatPresetPromptShorter"
+	| "chatPresetPromptFormal"
+	| "chatPresetPromptEmail"
+	| "chatPresetPromptBullets"
+	| "contextIntroLabel"
+	| "diffTitle"
+	| "diffApply"
+	| "diffDiscard"
+	| "diffNoChange"
 	| "toastErrorPrefix";
 
 // Full texts are taken verbatim from the reference extension so behaviour
@@ -118,6 +144,35 @@ const messages: Record<string, Record<I18nKey, string>> = {
 		settingsPrompts: "📝 System-Prompts",
 		settingsCustomActions: "⚡ Benutzerdefinierte Aktionen",
 		settingsFreePrompt: "💬 Freier Prompt (Chat-Modus)",
+		settingsModelLoad: "Modelle laden",
+		settingsModelsLoading: "Modelle werden geladen…",
+		settingsModelsLoaded: "$COUNT$ Modelle gefunden",
+		settingsModelsError: "Modelle konnten nicht geladen werden: ",
+		settingsModelsNeedUrl: "Bitte zuerst eine API-URL eintragen.",
+		settingsContextToggle: "Notizkontext an den Chat übergeben",
+		settingsContextDesc:
+			"Gibt dem freien Prompt zusätzlich Notiztitel, Pfad und den umliegenden Text mit. Der Schalter im Chat-Fenster lässt sich pro Sitzung umlegen.",
+		settingsContextChars: "Max. Zeichen Notizkontext",
+		settingsContextCharsHint:
+			"0 = kein Kontext. Höhere Werte geben dem Modell mehr Umgebung, kosten aber Kontextfenster.",
+		settingsConfirmToggle: "Ergebnis vor dem Ersetzen bestätigen",
+		settingsConfirmDesc:
+			"Zeigt nach jeder Aktion einen Vergleich (alt → neu) und ersetzt den Text erst nach Klick auf \"Übernehmen\". Standardmäßig aus: das Ergebnis wird direkt eingesetzt und kann über den Undo-Toast zurückgenommen werden.",
+		chatContextToggle: "Notizkontext",
+		chatPresetsLabel: "Vorlagen",
+		chatPresetShorter: "Kürzer",
+		chatPresetFormal: "Formeller",
+		chatPresetEmail: "Als E-Mail",
+		chatPresetBullets: "Bullet-Liste",
+		chatPresetPromptShorter: "Mach den Text kürzer, ohne Inhalt zu verlieren.",
+		chatPresetPromptFormal: "Schreibe den Text formeller und höflicher.",
+		chatPresetPromptEmail: "Formuliere den Text als vollständige E-Mail mit Anrede und Grußformel.",
+		chatPresetPromptBullets: "Fasse den Text als Bullet-Liste zusammen.",
+		contextIntroLabel: "Notizkontext (nur Hintergrundinfo, nicht Teil der Aufgabe):",
+		diffTitle: "Änderungen prüfen",
+		diffApply: "Übernehmen",
+		diffDiscard: "Verwerfen",
+		diffNoChange: "Keine Änderungen — Text bleibt unverändert.",
 		toastErrorPrefix: "Fehler: ",
 	},
 	en: {
@@ -180,6 +235,35 @@ const messages: Record<string, Record<I18nKey, string>> = {
 		settingsPrompts: "📝 System prompts",
 		settingsCustomActions: "⚡ Custom actions",
 		settingsFreePrompt: "💬 Free prompt (chat mode)",
+		settingsModelLoad: "Load models",
+		settingsModelsLoading: "Loading models…",
+		settingsModelsLoaded: "$COUNT$ models found",
+		settingsModelsError: "Could not load models: ",
+		settingsModelsNeedUrl: "Enter an API URL first.",
+		settingsContextToggle: "Pass note context to the chat",
+		settingsContextDesc:
+			"Also gives the free prompt the note title, path and the surrounding text. The switch in the chat window can be toggled per session.",
+		settingsContextChars: "Max note-context characters",
+		settingsContextCharsHint:
+			"0 = no context. Higher values give the model more surroundings but consume context window.",
+		settingsConfirmToggle: "Confirm result before replacing",
+		settingsConfirmDesc:
+			"Shows a comparison (old → new) after every action and only replaces the text once you click \"Apply\". Off by default: the result is inserted directly and can be reverted via the undo toast.",
+		chatContextToggle: "Note context",
+		chatPresetsLabel: "Presets",
+		chatPresetShorter: "Shorter",
+		chatPresetFormal: "More formal",
+		chatPresetEmail: "As email",
+		chatPresetBullets: "Bullet list",
+		chatPresetPromptShorter: "Make the text shorter without losing content.",
+		chatPresetPromptFormal: "Rewrite the text in a more formal and polite tone.",
+		chatPresetPromptEmail: "Turn the text into a complete email with a salutation and a sign-off.",
+		chatPresetPromptBullets: "Summarize the text as a bullet list.",
+		contextIntroLabel: "Note context (background information only, not part of the task):",
+		diffTitle: "Review changes",
+		diffApply: "Apply",
+		diffDiscard: "Discard",
+		diffNoChange: "No changes — text stays unchanged.",
 		toastErrorPrefix: "Error: ",
 	},
 };

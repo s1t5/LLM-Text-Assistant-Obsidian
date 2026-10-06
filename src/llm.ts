@@ -11,7 +11,7 @@
 // only when available for lower first-token latency.
 
 import { requestUrl } from "obsidian";
-import { isGerman } from "./i18n.ts";
+import { isGerman, t } from "./i18n.ts";
 
 export interface ChatMessage {
 	role: "system" | "user" | "assistant";
@@ -93,6 +93,99 @@ function networkErrorMessage(): string {
 	return isGerman()
 		? "Netzwerkfehler: Der API-Endpunkt ist nicht erreichbar."
 		: "Network error: the API endpoint is unreachable.";
+}
+
+// --- Model list (ported from the extension's background.js) ---
+
+// Derive the model-list endpoint from a chat-completions URL.
+// "…/v1/chat/completions" → "…/v1/models"; any other path keeps its base and
+// gets "/models" appended, so Ollama/LM Studio/llama.cpp all work.
+export function modelsUrlFromApiUrl(apiUrl: string): string {
+	const url = String(apiUrl || "").trim();
+	if (!url) return "";
+	if (/\/chat\/completions\/?$/i.test(url)) {
+		return url.replace(/\/chat\/completions\/?$/i, "/models");
+	}
+	if (/\/completions\/?$/i.test(url)) {
+		return url.replace(/\/completions\/?$/i, "/models");
+	}
+	return url.replace(/\/+$/, "") + "/models";
+}
+
+// GET <endpoint>/models and return the sorted, de-duplicated model ids.
+// Mirrors fetchModelList in the extension's background.js. requestUrl has no
+// timeout of its own, so the request races a 15s timer.
+export async function fetchModelList(
+	config: Pick<LlmRequestConfig, "apiUrl" | "apiKey">
+): Promise<string[]> {
+	const url = modelsUrlFromApiUrl(config.apiUrl);
+	if (!url) throw new Error(t("settingsModelsNeedUrl"));
+
+	const headers: Record<string, string> = { Accept: "application/json" };
+	if (config.apiKey) {
+		headers.Authorization = `Bearer ${config.apiKey}`;
+	}
+
+	let timeoutId = 0;
+	const timeout = new Promise<never>((_, reject) => {
+		timeoutId = window.setTimeout(
+			() => reject(new Error(t("settingsModelsError") + "timeout")),
+			15000
+		);
+	});
+
+	let response: { status: number; text: string };
+	try {
+		response = await Promise.race([
+			requestUrl({ url, method: "GET", headers, throw: false }),
+			timeout,
+		]);
+	} catch (err) {
+		if (err instanceof Error && err.message.endsWith("timeout")) throw err;
+		// requestUrl throws on network-level failures (unreachable host, DNS,
+		// TLS) before any status exists.
+		throw new Error(t("settingsModelsError") + "network (" + url + ")");
+	} finally {
+		window.clearTimeout(timeoutId);
+	}
+
+	if (response.status >= 400) {
+		throw new Error(t("settingsModelsError") + "HTTP " + response.status);
+	}
+
+	let data: unknown;
+	try {
+		data = JSON.parse(response.text);
+	} catch {
+		throw new Error(t("settingsModelsError") + "invalid JSON");
+	}
+
+	// OpenAI shape: { data: [{ id }] } — Ollama's /v1/models matches. Some
+	// servers answer { models: [...] } or a bare array; accept all three.
+	const asArray = (value: unknown): unknown[] => (Array.isArray(value) ? value : []);
+	const record = data && typeof data === "object" ? (data as Record<string, unknown>) : {};
+	const raw = Array.isArray(data)
+		? data
+		: asArray(record.data).length
+			? asArray(record.data)
+			: asArray(record.models);
+
+	const ids = raw
+		.map((entry) =>
+			typeof entry === "string"
+				? entry
+				: entry && typeof entry === "object"
+					? String(
+							(entry as { id?: unknown }).id ??
+								(entry as { name?: unknown }).name ??
+								""
+						)
+					: ""
+		)
+		.map((id) => id.trim())
+		.filter((id) => id.length > 0);
+
+	return Array.from(new Set(ids)).sort();
 }
 
 export interface LlmRequestConfig {

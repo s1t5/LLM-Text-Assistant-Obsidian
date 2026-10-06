@@ -40,7 +40,7 @@ __export(main_exports, {
   showUndoToast: () => showUndoToast
 });
 module.exports = __toCommonJS(main_exports);
-var import_obsidian4 = require("obsidian");
+var import_obsidian5 = require("obsidian");
 
 // src/i18n.ts
 var messages = {
@@ -95,6 +95,32 @@ var messages = {
     settingsPrompts: "\u{1F4DD} System-Prompts",
     settingsCustomActions: "\u26A1 Benutzerdefinierte Aktionen",
     settingsFreePrompt: "\u{1F4AC} Freier Prompt (Chat-Modus)",
+    settingsModelLoad: "Modelle laden",
+    settingsModelsLoading: "Modelle werden geladen\u2026",
+    settingsModelsLoaded: "$COUNT$ Modelle gefunden",
+    settingsModelsError: "Modelle konnten nicht geladen werden: ",
+    settingsModelsNeedUrl: "Bitte zuerst eine API-URL eintragen.",
+    settingsContextToggle: "Notizkontext an den Chat \xFCbergeben",
+    settingsContextDesc: "Gibt dem freien Prompt zus\xE4tzlich Notiztitel, Pfad und den umliegenden Text mit. Der Schalter im Chat-Fenster l\xE4sst sich pro Sitzung umlegen.",
+    settingsContextChars: "Max. Zeichen Notizkontext",
+    settingsContextCharsHint: "0 = kein Kontext. H\xF6here Werte geben dem Modell mehr Umgebung, kosten aber Kontextfenster.",
+    settingsConfirmToggle: "Ergebnis vor dem Ersetzen best\xE4tigen",
+    settingsConfirmDesc: 'Zeigt nach jeder Aktion einen Vergleich (alt \u2192 neu) und ersetzt den Text erst nach Klick auf "\xDCbernehmen". Standardm\xE4\xDFig aus: das Ergebnis wird direkt eingesetzt und kann \xFCber den Undo-Toast zur\xFCckgenommen werden.',
+    chatContextToggle: "Notizkontext",
+    chatPresetsLabel: "Vorlagen",
+    chatPresetShorter: "K\xFCrzer",
+    chatPresetFormal: "Formeller",
+    chatPresetEmail: "Als E-Mail",
+    chatPresetBullets: "Bullet-Liste",
+    chatPresetPromptShorter: "Mach den Text k\xFCrzer, ohne Inhalt zu verlieren.",
+    chatPresetPromptFormal: "Schreibe den Text formeller und h\xF6flicher.",
+    chatPresetPromptEmail: "Formuliere den Text als vollst\xE4ndige E-Mail mit Anrede und Gru\xDFformel.",
+    chatPresetPromptBullets: "Fasse den Text als Bullet-Liste zusammen.",
+    contextIntroLabel: "Notizkontext (nur Hintergrundinfo, nicht Teil der Aufgabe):",
+    diffTitle: "\xC4nderungen pr\xFCfen",
+    diffApply: "\xDCbernehmen",
+    diffDiscard: "Verwerfen",
+    diffNoChange: "Keine \xC4nderungen \u2014 Text bleibt unver\xE4ndert.",
     toastErrorPrefix: "Fehler: "
   },
   en: {
@@ -148,6 +174,32 @@ var messages = {
     settingsPrompts: "\u{1F4DD} System prompts",
     settingsCustomActions: "\u26A1 Custom actions",
     settingsFreePrompt: "\u{1F4AC} Free prompt (chat mode)",
+    settingsModelLoad: "Load models",
+    settingsModelsLoading: "Loading models\u2026",
+    settingsModelsLoaded: "$COUNT$ models found",
+    settingsModelsError: "Could not load models: ",
+    settingsModelsNeedUrl: "Enter an API URL first.",
+    settingsContextToggle: "Pass note context to the chat",
+    settingsContextDesc: "Also gives the free prompt the note title, path and the surrounding text. The switch in the chat window can be toggled per session.",
+    settingsContextChars: "Max note-context characters",
+    settingsContextCharsHint: "0 = no context. Higher values give the model more surroundings but consume context window.",
+    settingsConfirmToggle: "Confirm result before replacing",
+    settingsConfirmDesc: 'Shows a comparison (old \u2192 new) after every action and only replaces the text once you click "Apply". Off by default: the result is inserted directly and can be reverted via the undo toast.',
+    chatContextToggle: "Note context",
+    chatPresetsLabel: "Presets",
+    chatPresetShorter: "Shorter",
+    chatPresetFormal: "More formal",
+    chatPresetEmail: "As email",
+    chatPresetBullets: "Bullet list",
+    chatPresetPromptShorter: "Make the text shorter without losing content.",
+    chatPresetPromptFormal: "Rewrite the text in a more formal and polite tone.",
+    chatPresetPromptEmail: "Turn the text into a complete email with a salutation and a sign-off.",
+    chatPresetPromptBullets: "Summarize the text as a bullet list.",
+    contextIntroLabel: "Note context (background information only, not part of the task):",
+    diffTitle: "Review changes",
+    diffApply: "Apply",
+    diffDiscard: "Discard",
+    diffNoChange: "No changes \u2014 text stays unchanged.",
     toastErrorPrefix: "Error: "
   }
 };
@@ -186,7 +238,10 @@ var DEFAULT_SETTINGS = {
   promptSummarize: "",
   promptGrammar: "",
   customActions: [],
-  freePromptEnabled: true
+  freePromptEnabled: true,
+  contextEnabled: false,
+  contextChars: "600",
+  confirmBeforeReplace: false
 };
 
 // src/llm.ts
@@ -228,6 +283,65 @@ function timeoutMessage(seconds) {
 }
 function networkErrorMessage() {
   return isGerman() ? "Netzwerkfehler: Der API-Endpunkt ist nicht erreichbar." : "Network error: the API endpoint is unreachable.";
+}
+function modelsUrlFromApiUrl(apiUrl) {
+  const url = String(apiUrl || "").trim();
+  if (!url) return "";
+  if (/\/chat\/completions\/?$/i.test(url)) {
+    return url.replace(/\/chat\/completions\/?$/i, "/models");
+  }
+  if (/\/completions\/?$/i.test(url)) {
+    return url.replace(/\/completions\/?$/i, "/models");
+  }
+  return url.replace(/\/+$/, "") + "/models";
+}
+async function fetchModelList(config) {
+  const url = modelsUrlFromApiUrl(config.apiUrl);
+  if (!url) throw new Error(t("settingsModelsNeedUrl"));
+  const headers = { Accept: "application/json" };
+  if (config.apiKey) {
+    headers.Authorization = `Bearer ${config.apiKey}`;
+  }
+  let timeoutId = 0;
+  const timeout = new Promise((_, reject) => {
+    timeoutId = window.setTimeout(
+      () => reject(new Error(t("settingsModelsError") + "timeout")),
+      15e3
+    );
+  });
+  let response;
+  try {
+    response = await Promise.race([
+      (0, import_obsidian.requestUrl)({ url, method: "GET", headers, throw: false }),
+      timeout
+    ]);
+  } catch (err) {
+    if (err instanceof Error && err.message.endsWith("timeout")) throw err;
+    throw new Error(t("settingsModelsError") + "network (" + url + ")");
+  } finally {
+    window.clearTimeout(timeoutId);
+  }
+  if (response.status >= 400) {
+    throw new Error(t("settingsModelsError") + "HTTP " + response.status);
+  }
+  let data;
+  try {
+    data = JSON.parse(response.text);
+  } catch (e) {
+    throw new Error(t("settingsModelsError") + "invalid JSON");
+  }
+  const asArray = (value) => Array.isArray(value) ? value : [];
+  const record = data && typeof data === "object" ? data : {};
+  const raw = Array.isArray(data) ? data : asArray(record.data).length ? asArray(record.data) : asArray(record.models);
+  const ids = raw.map(
+    (entry) => {
+      var _a, _b;
+      return typeof entry === "string" ? entry : entry && typeof entry === "object" ? String(
+        (_b = (_a = entry.id) != null ? _a : entry.name) != null ? _b : ""
+      ) : "";
+    }
+  ).map((id) => id.trim()).filter((id) => id.length > 0);
+  return Array.from(new Set(ids)).sort();
 }
 async function fetchWithRetry(config, requestBody, signal) {
   const timeoutMs = Math.max(5, parseInt(config.timeoutSeconds || "60", 10) || 60) * 1e3;
@@ -461,11 +575,166 @@ var LlmClient = class {
   }
 };
 
+// src/note-context.ts
+function tailLines(text, max) {
+  if (max <= 0) return "";
+  if (text.length <= max) return text.trim();
+  const slice = text.slice(text.length - max);
+  const newline = slice.indexOf("\n");
+  return (newline >= 0 ? slice.slice(newline + 1) : slice).trim();
+}
+function headLines(text, max) {
+  if (max <= 0) return "";
+  if (text.length <= max) return text.trim();
+  const slice = text.slice(0, max);
+  const newline = slice.lastIndexOf("\n");
+  return (newline >= 0 ? slice.slice(0, newline) : slice).trim();
+}
+function collectNoteContext(content, meta, selection, maxChars) {
+  const limit = parseInt(maxChars, 10);
+  if (!limit || limit <= 0) return "";
+  const parts = [];
+  if (meta.title && meta.title.trim()) parts.push("TITLE: " + meta.title.trim());
+  if (meta.path && meta.path.trim()) parts.push("PATH: " + meta.path.trim());
+  const head = parts.join("\n");
+  const start = Math.max(0, Math.min(selection.startOffset, content.length));
+  const end = Math.max(start, Math.min(selection.endOffset, content.length));
+  const half = Math.max(0, Math.floor(limit / 2));
+  const body = [
+    tailLines(content.slice(0, start), half),
+    headLines(content.slice(end), half)
+  ].filter((part) => part.length > 0).join("\n");
+  if (head.length >= limit) return head.slice(0, limit);
+  const room = limit - head.length - 1;
+  const bodyText = body.slice(0, Math.max(0, room));
+  if (!bodyText) return head;
+  return head ? head + "\n" + bodyText : bodyText;
+}
+
 // src/chat-modal.ts
+var import_obsidian3 = require("obsidian");
+
+// src/diff-modal.ts
 var import_obsidian2 = require("obsidian");
+
+// src/diff.ts
+var MAX_TOKENS = 1200;
+function diffWords(oldText, newText) {
+  const tokenize = (value) => String(value).match(/\s+|[^\s]+/g) || [];
+  const a = tokenize(oldText);
+  const b = tokenize(newText);
+  if (a.length > MAX_TOKENS || b.length > MAX_TOKENS) {
+    return [
+      { type: "del", text: String(oldText) },
+      { type: "ins", text: String(newText) }
+    ];
+  }
+  const n = a.length;
+  const m = b.length;
+  const dp = [];
+  for (let i2 = 0; i2 <= n; i2++) dp.push(new Uint32Array(m + 1));
+  for (let i2 = n - 1; i2 >= 0; i2--) {
+    for (let j2 = m - 1; j2 >= 0; j2--) {
+      dp[i2][j2] = a[i2] === b[j2] ? dp[i2 + 1][j2 + 1] + 1 : Math.max(dp[i2 + 1][j2], dp[i2][j2 + 1]);
+    }
+  }
+  const out = [];
+  const push = (type, text) => {
+    if (!text) return;
+    const last = out[out.length - 1];
+    if (last && last.type === type) last.text += text;
+    else out.push({ type, text });
+  };
+  let i = 0;
+  let j = 0;
+  while (i < n && j < m) {
+    if (a[i] === b[j]) {
+      push("eq", a[i]);
+      i++;
+      j++;
+    } else if (dp[i + 1][j] >= dp[i][j + 1]) {
+      push("del", a[i]);
+      i++;
+    } else {
+      push("ins", b[j]);
+      j++;
+    }
+  }
+  while (i < n) {
+    push("del", a[i]);
+    i++;
+  }
+  while (j < m) {
+    push("ins", b[j]);
+    j++;
+  }
+  return out;
+}
+function isUnchanged(segments) {
+  return segments.every((segment) => segment.type === "eq");
+}
+
+// src/diff-modal.ts
+function renderDiff(container, oldText, newText) {
+  container.empty();
+  const segments = diffWords(oldText, newText);
+  if (isUnchanged(segments)) {
+    container.createDiv({ cls: "llmta-diff-nochange", text: t("diffNoChange") });
+    return;
+  }
+  for (const segment of segments) {
+    const span = container.createSpan({
+      text: /^\s+$/.test(segment.text) ? " " : segment.text
+    });
+    if (segment.type === "del") span.addClass("llmta-diff-del");
+    else if (segment.type === "ins") span.addClass("llmta-diff-ins");
+  }
+}
+var DiffConfirmModal = class extends import_obsidian2.Modal {
+  constructor(app, oldText, newText, options) {
+    super(app);
+    this.decided = false;
+    this.oldText = oldText;
+    this.newText = newText;
+    this.options = options;
+  }
+  onOpen() {
+    this.setTitle(t("diffTitle"));
+    this.contentEl.addClass("llmta-diff-modal");
+    const body = this.contentEl.createDiv({ cls: "llmta-diff-body" });
+    renderDiff(body, this.oldText, this.newText);
+    const footer = this.contentEl.createDiv({ cls: "llmta-diff-footer" });
+    const discardBtn = footer.createEl("button", { text: t("diffDiscard") });
+    discardBtn.addEventListener("click", () => {
+      this.decided = true;
+      this.options.onDiscard();
+      this.close();
+    });
+    const applyBtn = footer.createEl("button", {
+      text: t("diffApply"),
+      cls: "mod-cta"
+    });
+    applyBtn.addEventListener("click", () => {
+      this.decided = true;
+      this.options.onApply();
+      this.close();
+    });
+  }
+  onClose() {
+    if (!this.decided) this.options.onDiscard();
+  }
+};
+
+// src/chat-modal.ts
+var CHAT_PRESETS = [
+  { labelKey: "chatPresetShorter", promptKey: "chatPresetPromptShorter" },
+  { labelKey: "chatPresetFormal", promptKey: "chatPresetPromptFormal" },
+  { labelKey: "chatPresetEmail", promptKey: "chatPresetPromptEmail" },
+  { labelKey: "chatPresetBullets", promptKey: "chatPresetPromptBullets" }
+];
 function clipboardWrite(text) {
   void navigator.clipboard.writeText(text).catch(() => {
-    new import_obsidian2.Notice(t("errorPrefix") + t("errorGeneric"));
+    new import_obsidian3.Notice(t("errorPrefix") + t("errorGeneric"));
   });
 }
 function wrapAssistantBubble(parent, bubble) {
@@ -488,7 +757,7 @@ function addCopyButton(modal, wrapper, bubble) {
     });
   });
 }
-var FreePromptModal = class extends import_obsidian2.Modal {
+var FreePromptModal = class extends import_obsidian3.Modal {
   constructor(plugin, editor) {
     super(plugin.app);
     this.messages = [];
@@ -497,6 +766,9 @@ var FreePromptModal = class extends import_obsidian2.Modal {
     // when an older bubble is copied.
     this.generatedText = "";
     this.isModalOpen = false;
+    // Note context for this chat session (v1.1.0)
+    this.contextEnabled = false;
+    this.contextText = "";
     this.boundKeydown = null;
     this.plugin = plugin;
     this.editor = editor;
@@ -505,12 +777,16 @@ var FreePromptModal = class extends import_obsidian2.Modal {
     this.isModalOpen = true;
     this.contentEl.addClass("llmta-chat-modal");
     this.titleEl.setText(t("chatTitle"));
+    this.contextEnabled = this.plugin.settings.contextEnabled === true;
+    this.refreshContextText();
+    this.addContextToggle();
     const sel = getEditorSelection(this.editor);
     const contextText = sel.text.trim() ? sel.text : "";
     this.messages = this.buildInitialMessages(contextText);
     this.chatEl = this.contentEl.createDiv({ cls: "llmta-chat-log" });
     this.addBubble("system", contextText ? t("chatWelcomeWithContext") : t("chatWelcomeNoContext"));
     this.statusEl = this.contentEl.createDiv({ cls: "llmta-chat-status is-hidden" });
+    this.contentEl.appendChild(this.createPresets());
     const inputRow = this.contentEl.createDiv({ cls: "llmta-chat-input-row" });
     this.inputEl = inputRow.createEl("textarea", { cls: "llmta-chat-input" });
     this.inputEl.placeholder = t("chatInputPlaceholder");
@@ -570,7 +846,47 @@ var FreePromptModal = class extends import_obsidian2.Modal {
     if (contextText) {
       systemContent += "\n\n" + t("freePromptContextIntro") + "\n\n---\n" + contextText + "\n---";
     }
+    if (this.contextEnabled && this.contextText.trim()) {
+      systemContent += "\n\n" + t("contextIntroLabel") + "\n\n---\n" + this.contextText + "\n---";
+    }
     return [{ role: "system", content: systemContent }];
+  }
+  // Recompute the note context (title, path, surroundings) for the current
+  // editor state. Mirrors setChatContextEnabled in content.js: the system
+  // message is rebuilt, the visible transcript stays.
+  refreshContextText() {
+    this.contextText = this.contextEnabled ? this.plugin.collectContextFor(this.editor) : "";
+  }
+  // Header checkbox — per-session switch, seeded from the setting.
+  addContextToggle() {
+    const wrap = this.titleEl.createEl("label", { cls: "llmta-chat-context" });
+    const toggle = wrap.createEl("input", { type: "checkbox" });
+    toggle.checked = this.contextEnabled;
+    toggle.addEventListener("change", () => {
+      this.contextEnabled = toggle.checked;
+      this.refreshContextText();
+      const sel = getEditorSelection(this.editor);
+      this.messages = this.buildInitialMessages(sel.text.trim() ? sel.text : "");
+    });
+    wrap.createSpan({ text: t("chatContextToggle") });
+  }
+  // Preset chips: one click drops a ready-made instruction into the input.
+  createPresets() {
+    const wrap = this.contentEl.createDiv({ cls: "llmta-chat-presets" });
+    wrap.createSpan({ cls: "llmta-chat-presets-label", text: t("chatPresetsLabel") });
+    for (const preset of CHAT_PRESETS) {
+      const chip = wrap.createEl("button", {
+        cls: "llmta-chat-preset",
+        text: t(preset.labelKey)
+      });
+      chip.type = "button";
+      chip.addEventListener("click", (evt) => {
+        evt.preventDefault();
+        this.inputEl.value = t(preset.promptKey);
+        this.inputEl.focus();
+      });
+    }
+    return wrap;
   }
   addBubble(role, text) {
     const bubble = this.chatEl.createDiv({ cls: `llmta-bubble llmta-bubble-${role}` });
@@ -587,11 +903,11 @@ var FreePromptModal = class extends import_obsidian2.Modal {
   }
   copyLatest() {
     if (!this.generatedText.trim()) {
-      new import_obsidian2.Notice(t("errorPrefix") + t("errorNoResult"));
+      new import_obsidian3.Notice(t("errorPrefix") + t("errorNoResult"));
       return;
     }
     clipboardWrite(this.generatedText);
-    new import_obsidian2.Notice(t("chatCopied"));
+    new import_obsidian3.Notice(t("chatCopied"));
   }
   markCopied(btn) {
     const prev = btn.getText();
@@ -655,16 +971,27 @@ var FreePromptModal = class extends import_obsidian2.Modal {
   }
   handleApply() {
     if (!this.generatedText.trim()) {
-      new import_obsidian2.Notice(t("errorPrefix") + t("errorNoResult"));
+      new import_obsidian3.Notice(t("errorPrefix") + t("errorNoResult"));
       return;
     }
     const sel = getEditorSelection(this.editor);
-    if (sel.isSelection) {
-      this.editor.replaceRange(this.generatedText, sel.from, sel.to);
-    } else {
-      this.editor.replaceRange(this.generatedText, sel.from, sel.from);
+    const write = () => {
+      if (sel.isSelection) {
+        this.editor.replaceRange(this.generatedText, sel.from, sel.to);
+      } else {
+        this.editor.replaceRange(this.generatedText, sel.from, sel.from);
+      }
+      this.close();
+    };
+    if (this.plugin.settings.confirmBeforeReplace) {
+      new DiffConfirmModal(this.app, sel.isSelection ? sel.text : "", this.generatedText, {
+        onApply: write,
+        onDiscard: () => {
+        }
+      }).open();
+      return;
     }
-    this.close();
+    write();
   }
   handleReset() {
     this.stopStreaming();
@@ -681,8 +1008,8 @@ var FreePromptModal = class extends import_obsidian2.Modal {
 };
 
 // src/menu-modal.ts
-var import_obsidian3 = require("obsidian");
-var ActionMenuModal = class extends import_obsidian3.FuzzySuggestModal {
+var import_obsidian4 = require("obsidian");
+var ActionMenuModal = class extends import_obsidian4.FuzzySuggestModal {
   constructor(plugin, editor) {
     super(plugin.app);
     this.plugin = plugin;
@@ -830,7 +1157,7 @@ function showUndoToast(handle) {
   const { editor, from, originalText, insertOffset } = handle;
   const finalTo = editor.offsetToPos(insertOffset);
   const originalFrom = from;
-  const notice = new import_obsidian4.Notice("", 8e3);
+  const notice = new import_obsidian5.Notice("", 8e3);
   const el = notice.messageEl;
   el.empty();
   el.addClass("llmta-undo-toast");
@@ -845,13 +1172,16 @@ function showUndoToast(handle) {
     notice.hide();
   });
 }
-var LlmTextAssistantPlugin2 = class extends import_obsidian4.Plugin {
+var LlmTextAssistantPlugin2 = class extends import_obsidian5.Plugin {
   constructor() {
     super(...arguments);
     this.runningNotice = null;
+    // Command ids already registered for custom actions (v1.1.0) — re-adding an
+    // id would throw, and indices shift when an action is deleted.
+    this.registeredCustomCommandIds = /* @__PURE__ */ new Set();
   }
   async onload() {
-    initI18n(import_obsidian4.moment.locale());
+    initI18n(import_obsidian5.moment.locale());
     await this.loadSettings();
     this.addSettingTab(new LlmTextAssistantSettingTab(this.app, this));
     this.addRibbonIcon("sparkles", t("extensionName"), () => {
@@ -882,6 +1212,7 @@ var LlmTextAssistantPlugin2 = class extends import_obsidian4.Plugin {
         editorCallback: (editor) => this.openFreePrompt(editor)
       });
     }
+    this.registerCustomActionCommands();
     this.registerEvent(
       this.app.workspace.on("editor-menu", (menu, editor) => {
         this.addActionsToMenu(menu, editor);
@@ -918,6 +1249,43 @@ var LlmTextAssistantPlugin2 = class extends import_obsidian4.Plugin {
     }
     return null;
   }
+  // Register one command per custom action so Obsidian's hotkey settings can
+  // bind them (parity with the extension's per-action shortcuts). Called on
+  // load and whenever the custom-action list changes; ids that are already
+  // registered are skipped, because addCommand throws on duplicates.
+  // Known limitation: deleting an action leaves its command (and a hotkey
+  // bound to it) registered until the next reload — command ids follow the
+  // list index, so removing an entry shifts the indices.
+  registerCustomActionCommands() {
+    this.settings.customActions.forEach((action, idx) => {
+      if (!action.title || !action.title.trim()) return;
+      const id = `custom-action-${idx}`;
+      if (this.registeredCustomCommandIds.has(id)) return;
+      this.registeredCustomCommandIds.add(id);
+      this.addCommand({
+        id,
+        name: `${action.emoji || "\u26A1"} ${action.title}`,
+        editorCallback: (editor) => this.runAction(editor, `custom_${idx}`)
+      });
+    });
+  }
+  // Note context for the free-prompt chat (v1.1.0) — the Obsidian analogue
+  // of the extension's page context: note title, vault path and the text
+  // surrounding the current selection/cursor, capped by the setting.
+  collectContextFor(editor) {
+    var _a, _b;
+    const file = this.app.workspace.getActiveFile();
+    const sel = getEditorSelection(editor);
+    return collectNoteContext(
+      editor.getValue(),
+      { title: (_a = file == null ? void 0 : file.basename) != null ? _a : "", path: (_b = file == null ? void 0 : file.path) != null ? _b : "" },
+      {
+        startOffset: editor.posToOffset(sel.from),
+        endOffset: editor.posToOffset(sel.to)
+      },
+      this.settings.contextChars
+    );
+  }
   addActionsToMenu(menu, editor) {
     menu.addSeparator();
     for (const actionId of BUILTIN_ACTION_IDS) {
@@ -947,7 +1315,7 @@ var LlmTextAssistantPlugin2 = class extends import_obsidian4.Plugin {
   openActionMenu() {
     const editor = this.getActiveEditor();
     if (!editor) {
-      new import_obsidian4.Notice(t("errorPrefix") + t("errorNoText"));
+      new import_obsidian5.Notice(t("errorPrefix") + t("errorNoText"));
       return;
     }
     new ActionMenuModal(this, editor).open();
@@ -960,14 +1328,14 @@ var LlmTextAssistantPlugin2 = class extends import_obsidian4.Plugin {
   async runAction(editor, actionId) {
     const sel = getEditorSelection(editor);
     if (!sel.text.trim()) {
-      new import_obsidian4.Notice(t("errorPrefix") + t("errorNoText"));
+      new import_obsidian5.Notice(t("errorPrefix") + t("errorNoText"));
       return;
     }
     let messages2;
     try {
       messages2 = buildPromptParts(actionId, sel.text, this.settings);
     } catch (err) {
-      new import_obsidian4.Notice(t("errorPrefix") + (err.message || t("errorGeneric")));
+      new import_obsidian5.Notice(t("errorPrefix") + (err.message || t("errorGeneric")));
       return;
     }
     const controller = new AbortController();
@@ -978,22 +1346,34 @@ var LlmTextAssistantPlugin2 = class extends import_obsidian4.Plugin {
       onToken: (token) => applyStreamToken(handle, token),
       onDone: () => {
         this.hideProcessingNotice();
+        const resultText = editor.getRange(
+          handle.from,
+          editor.offsetToPos(handle.insertOffset)
+        );
+        if (this.settings.confirmBeforeReplace) {
+          const finalTo = editor.offsetToPos(handle.insertOffset);
+          new DiffConfirmModal(this.app, handle.originalText, resultText, {
+            onApply: () => showUndoToast(handle),
+            onDiscard: () => editor.replaceRange(handle.originalText, handle.from, finalTo)
+          }).open();
+          return;
+        }
         showUndoToast(handle);
       },
       onError: (message) => {
         this.hideProcessingNotice();
-        new import_obsidian4.Notice(t("errorPrefix") + message, 8e3);
+        new import_obsidian5.Notice(t("errorPrefix") + message, 8e3);
       },
       onAborted: () => {
         this.hideProcessingNotice();
-        new import_obsidian4.Notice(t("requestCancelled"));
+        new import_obsidian5.Notice(t("requestCancelled"));
       }
     });
   }
   // "Processing… Click to cancel" toast, ported from the extension's
   // floating loading icon.
   showProcessingNotice(controller) {
-    const notice = new import_obsidian4.Notice(t("iconTooltipProcessing"), 0);
+    const notice = new import_obsidian5.Notice(t("iconTooltipProcessing"), 0);
     notice.messageEl.addEventListener("click", () => {
       controller.abort();
       this.hideProcessingNotice();
@@ -1007,10 +1387,38 @@ var LlmTextAssistantPlugin2 = class extends import_obsidian4.Plugin {
     }
   }
 };
-var LlmTextAssistantSettingTab = class extends import_obsidian4.PluginSettingTab {
+var MODEL_LIST_ID = "llmta-model-list";
+var LlmTextAssistantSettingTab = class extends import_obsidian5.PluginSettingTab {
   constructor(app, plugin) {
     super(app, plugin);
+    // <datalist> element of the model field (v1.1.0) — filled by loadModels().
+    this.modelListEl = null;
     this.plugin = plugin;
+  }
+  // Fetch the endpoint's model list and offer it as autocomplete for the
+  // model field. Ported from the extension's options page.
+  async loadModels() {
+    const notice = new import_obsidian5.Notice(t("settingsModelsLoading"), 0);
+    try {
+      const models = await fetchModelList({
+        apiUrl: this.plugin.settings.apiUrl,
+        apiKey: this.plugin.settings.apiKey
+      });
+      if (this.modelListEl) {
+        this.modelListEl.empty();
+        for (const model of models) {
+          this.modelListEl.createEl("option", { value: model });
+        }
+      }
+      notice.hide();
+      new import_obsidian5.Notice(t("settingsModelsLoaded", { COUNT: String(models.length) }));
+    } catch (err) {
+      notice.hide();
+      new import_obsidian5.Notice(
+        t("errorPrefix") + (err.message || t("errorGeneric")),
+        8e3
+      );
+    }
   }
   // Declarative settings for Obsidian's settings search (1.13.0+).
   // Mirrors the imperative display() tab; the fallback rendering below stays
@@ -1128,14 +1536,40 @@ var LlmTextAssistantSettingTab = class extends import_obsidian4.PluginSettingTab
             control: { type: "toggle", key: "freePromptEnabled", defaultValue: true }
           }
         ]
+      },
+      {
+        type: "group",
+        heading: t("settingsContextToggle"),
+        items: [
+          {
+            name: t("settingsContextToggle"),
+            desc: t("settingsContextDesc"),
+            control: { type: "toggle", key: "contextEnabled", defaultValue: false }
+          },
+          text("contextChars", t("settingsContextChars"), t("settingsContextCharsHint")),
+          {
+            name: t("settingsConfirmToggle"),
+            desc: t("settingsConfirmDesc"),
+            control: { type: "toggle", key: "confirmBeforeReplace", defaultValue: false }
+          },
+          {
+            name: t("settingsModelLoad"),
+            desc: german ? "L\xE4dt die Modelle des Endpunkts (GET /models) als Vorschl\xE4ge f\xFCr das Modell-Feld." : "Loads the endpoint's models (GET /models) as suggestions for the model field.",
+            render: (setting) => {
+              setting.addButton((btn) => {
+                btn.setButtonText(t("settingsModelLoad")).onClick(() => void this.loadModels());
+              });
+            }
+          }
+        ]
       }
     ];
   }
   display() {
     const { containerEl } = this;
     containerEl.empty();
-    new import_obsidian4.Setting(containerEl).setName(t("settingsHeading")).setHeading();
-    new import_obsidian4.Setting(containerEl).setName(t("settingsApiUrl")).setDesc(
+    new import_obsidian5.Setting(containerEl).setName(t("settingsHeading")).setHeading();
+    new import_obsidian5.Setting(containerEl).setName(t("settingsApiUrl")).setDesc(
       isGerman() ? "z. B. OpenAI (https://api.openai.com/v1/chat/completions), Ollama (http://localhost:11434/v1/chat/completions) oder LM Studio" : "e.g. OpenAI (https://api.openai.com/v1/chat/completions), Ollama (http://localhost:11434/v1/chat/completions) or LM Studio"
     ).addText((text) => {
       text.setValue(this.plugin.settings.apiUrl).onChange(async (value) => {
@@ -1143,7 +1577,7 @@ var LlmTextAssistantSettingTab = class extends import_obsidian4.PluginSettingTab
         await this.plugin.saveSettings();
       });
     });
-    new import_obsidian4.Setting(containerEl).setName(t("settingsApiKey")).setDesc(
+    new import_obsidian5.Setting(containerEl).setName(t("settingsApiKey")).setDesc(
       isGerman() ? "Bei lokalen Endpunkten leer lassen" : "Leave empty for local endpoints"
     ).addText((text) => {
       text.setValue(this.plugin.settings.apiKey).onChange(async (value) => {
@@ -1151,15 +1585,20 @@ var LlmTextAssistantSettingTab = class extends import_obsidian4.PluginSettingTab
         await this.plugin.saveSettings();
       });
     });
-    new import_obsidian4.Setting(containerEl).setName(t("settingsModel")).setDesc(
-      isGerman() ? "z. B. gpt-4, llama3.1, mistral" : "e.g. gpt-4, llama3.1, mistral"
+    new import_obsidian5.Setting(containerEl).setName(t("settingsModel")).setDesc(
+      isGerman() ? "z. B. gpt-4, llama3.1, mistral. \u201EModelle laden\u201C holt die Modelle des Endpunkts als Vorschl\xE4ge." : `e.g. gpt-4, llama3.1, mistral. "Load models" fetches the endpoint's models as suggestions.`
     ).addText((text) => {
       text.setValue(this.plugin.settings.model).onChange(async (value) => {
         this.plugin.settings.model = value;
         await this.plugin.saveSettings();
       });
+      text.inputEl.setAttribute("list", MODEL_LIST_ID);
+    }).addButton((btn) => {
+      btn.setButtonText(t("settingsModelLoad")).onClick(() => void this.loadModels());
     });
-    new import_obsidian4.Setting(containerEl).setName(t("settingsTemperature")).setDesc(
+    this.modelListEl = containerEl.createEl("datalist");
+    this.modelListEl.id = MODEL_LIST_ID;
+    new import_obsidian5.Setting(containerEl).setName(t("settingsTemperature")).setDesc(
       isGerman() ? "0 = deterministisch, 2 = sehr kreativ (Standard: 0.3)" : "0 = deterministic, 2 = very creative (default: 0.3)"
     ).addText((text) => {
       text.setValue(this.plugin.settings.temperature).onChange(async (value) => {
@@ -1167,7 +1606,7 @@ var LlmTextAssistantSettingTab = class extends import_obsidian4.PluginSettingTab
         await this.plugin.saveSettings();
       });
     });
-    new import_obsidian4.Setting(containerEl).setName(t("settingsTimeout")).setDesc(
+    new import_obsidian5.Setting(containerEl).setName(t("settingsTimeout")).setDesc(
       isGerman() ? "Maximale Wartezeit pro Anfrage (Standard: 60)" : "Maximum wait time per request (default: 60)"
     ).addText((text) => {
       text.setValue(this.plugin.settings.timeoutSeconds).onChange(async (value) => {
@@ -1175,7 +1614,7 @@ var LlmTextAssistantSettingTab = class extends import_obsidian4.PluginSettingTab
         await this.plugin.saveSettings();
       });
     });
-    new import_obsidian4.Setting(containerEl).setName(t("settingsTargetLanguage")).setDesc(
+    new import_obsidian5.Setting(containerEl).setName(t("settingsTargetLanguage")).setDesc(
       isGerman() ? "Sprache, in die \xFCbersetzt wird, z. B. Englisch, Deutsch, Franz\xF6sisch" : "Language to translate into, e.g. English, German, French"
     ).addText((text) => {
       text.setValue(this.plugin.settings.targetLanguage || t("defaultTargetLanguage")).onChange(async (value) => {
@@ -1183,7 +1622,7 @@ var LlmTextAssistantSettingTab = class extends import_obsidian4.PluginSettingTab
         await this.plugin.saveSettings();
       });
     });
-    new import_obsidian4.Setting(containerEl).setName(t("settingsPrompts")).setHeading();
+    new import_obsidian5.Setting(containerEl).setName(t("settingsPrompts")).setHeading();
     const promptFields = [
       {
         key: "promptTranslate",
@@ -1195,7 +1634,7 @@ var LlmTextAssistantSettingTab = class extends import_obsidian4.PluginSettingTab
       { key: "promptGrammar", name: t("actionGrammar"), fallback: t("defaultPromptGrammar") }
     ];
     for (const { key, name, fallback } of promptFields) {
-      const setting = new import_obsidian4.Setting(containerEl).setName(name);
+      const setting = new import_obsidian5.Setting(containerEl).setName(name);
       if (key === "promptTranslate") {
         setting.setDesc(
           isGerman() ? "Platzhalter {TARGET_LANGUAGE} wird zur Laufzeit durch die Zielsprache ersetzt. Feld leeren = Standard-Prompt." : "The {TARGET_LANGUAGE} placeholder is replaced with the target language at runtime. Empty field = default prompt."
@@ -1210,8 +1649,8 @@ var LlmTextAssistantSettingTab = class extends import_obsidian4.PluginSettingTab
         text.inputEl.addClass("llmta-settings-textarea");
       });
     }
-    new import_obsidian4.Setting(containerEl).setName(t("settingsCustomActions")).setHeading();
-    new import_obsidian4.Setting(containerEl).setDesc(
+    new import_obsidian5.Setting(containerEl).setName(t("settingsCustomActions")).setHeading();
+    new import_obsidian5.Setting(containerEl).setDesc(
       isGerman() ? "Definiere eigene Aktionen mit Emoji, Titel und Prompt. Diese erscheinen im Men\xFC und im Kontextmen\xFC des Editors." : "Define your own actions with emoji, title and prompt. They appear in the menu and the editor context menu."
     );
     const renderCustomActions = () => {
@@ -1250,25 +1689,45 @@ var LlmTextAssistantSettingTab = class extends import_obsidian4.PluginSettingTab
         removeBtn.addEventListener("click", () => {
           this.plugin.settings.customActions.splice(idx, 1);
           void this.plugin.saveSettings();
+          this.plugin.registerCustomActionCommands();
           renderCustomActions();
         });
       });
     };
     const listEl = containerEl.createDiv();
     renderCustomActions();
-    new import_obsidian4.Setting(containerEl).addButton((btn) => {
+    new import_obsidian5.Setting(containerEl).addButton((btn) => {
       btn.setButtonText(isGerman() ? "\uFF0B Neue Aktion hinzuf\xFCgen" : "\uFF0B Add new action").onClick(() => {
         this.plugin.settings.customActions.push({ emoji: "\u26A1", title: "", prompt: "" });
         void this.plugin.saveSettings();
+        this.plugin.registerCustomActionCommands();
         renderCustomActions();
       });
     });
-    new import_obsidian4.Setting(containerEl).setName(t("settingsFreePrompt")).setHeading();
-    new import_obsidian4.Setting(containerEl).setName(
+    new import_obsidian5.Setting(containerEl).setName(t("settingsFreePrompt")).setHeading();
+    new import_obsidian5.Setting(containerEl).setName(
       isGerman() ? "Freien Prompt im Men\xFC anzeigen" : "Show free prompt in the menu"
     ).addToggle((toggle) => {
       toggle.setValue(this.plugin.settings.freePromptEnabled).onChange(async (value) => {
         this.plugin.settings.freePromptEnabled = value;
+        await this.plugin.saveSettings();
+      });
+    });
+    new import_obsidian5.Setting(containerEl).setName(t("settingsContextToggle")).setDesc(t("settingsContextDesc")).addToggle((toggle) => {
+      toggle.setValue(this.plugin.settings.contextEnabled).onChange(async (value) => {
+        this.plugin.settings.contextEnabled = value;
+        await this.plugin.saveSettings();
+      });
+    });
+    new import_obsidian5.Setting(containerEl).setName(t("settingsContextChars")).setDesc(t("settingsContextCharsHint")).addText((text) => {
+      text.setValue(this.plugin.settings.contextChars).onChange(async (value) => {
+        this.plugin.settings.contextChars = value;
+        await this.plugin.saveSettings();
+      });
+    });
+    new import_obsidian5.Setting(containerEl).setName(t("settingsConfirmToggle")).setDesc(t("settingsConfirmDesc")).addToggle((toggle) => {
+      toggle.setValue(this.plugin.settings.confirmBeforeReplace).onChange(async (value) => {
+        this.plugin.settings.confirmBeforeReplace = value;
         await this.plugin.saveSettings();
       });
     });

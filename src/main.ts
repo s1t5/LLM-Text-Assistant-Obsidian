@@ -5,15 +5,17 @@
 //
 // Copyright (C) s1t5 — GPL-3.0-or-later (see LICENSE)
 
-import { App, Editor, Menu, Notice, Plugin, PluginSettingTab, Setting, SettingDefinitionItem, SettingGroupItem, moment } from "obsidian";
+import { App, Editor, Menu, Notice, Plugin, PluginSettingTab, Setting, SettingDefinitionItem, SettingGroupItem, TFile, moment } from "obsidian";
 import { initI18n, isGerman, t } from "./i18n";
 import {
 	CustomAction,
 	DEFAULT_SETTINGS,
 	LlmTextAssistantSettings,
 } from "./settings";
-import { ChatMessage, LlmClient } from "./llm";
+import { ChatMessage, LlmClient, fetchModelList } from "./llm";
+import { collectNoteContext } from "./note-context";
 import { FreePromptModal } from "./chat-modal";
+import { DiffConfirmModal } from "./diff-modal";
 import { ActionMenuModal } from "./menu-modal";
 
 export const BUILTIN_ACTION_IDS = ["translate", "expand", "summarize", "grammar"] as const;
@@ -210,6 +212,9 @@ export function showUndoToast(handle: ReplaceHandle): void {
 export default class LlmTextAssistantPlugin extends Plugin {
 	settings!: LlmTextAssistantSettings;
 	private runningNotice: Notice | null = null;
+	// Command ids already registered for custom actions (v1.1.0) — re-adding an
+	// id would throw, and indices shift when an action is deleted.
+	private registeredCustomCommandIds = new Set<string>();
 
 	async onload() {
 		initI18n(moment.locale());
@@ -251,6 +256,11 @@ export default class LlmTextAssistantPlugin extends Plugin {
 			});
 		}
 
+		// Custom actions get their own commands so Obsidian hotkeys can be
+		// assigned to them — parity with the extension, where every action
+		// (built-in, custom, free prompt) can carry a shortcut.
+		this.registerCustomActionCommands();
+
 		// Editor context menu (right-click), mirroring the browser context menu
 		this.registerEvent(
 			this.app.workspace.on("editor-menu", (menu: Menu, editor: Editor) => {
@@ -290,6 +300,44 @@ export default class LlmTextAssistantPlugin extends Plugin {
 			if (mdView.editor) return mdView.editor;
 		}
 		return null;
+	}
+
+	// Register one command per custom action so Obsidian's hotkey settings can
+	// bind them (parity with the extension's per-action shortcuts). Called on
+	// load and whenever the custom-action list changes; ids that are already
+	// registered are skipped, because addCommand throws on duplicates.
+	// Known limitation: deleting an action leaves its command (and a hotkey
+	// bound to it) registered until the next reload — command ids follow the
+	// list index, so removing an entry shifts the indices.
+	registerCustomActionCommands(): void {
+		this.settings.customActions.forEach((action, idx) => {
+			if (!action.title || !action.title.trim()) return;
+			const id = `custom-action-${idx}`;
+			if (this.registeredCustomCommandIds.has(id)) return;
+			this.registeredCustomCommandIds.add(id);
+			this.addCommand({
+				id,
+				name: `${action.emoji || "⚡"} ${action.title}`,
+				editorCallback: (editor) => this.runAction(editor, `custom_${idx}`),
+			});
+		});
+	}
+
+	// Note context for the free-prompt chat (v1.1.0) — the Obsidian analogue
+	// of the extension's page context: note title, vault path and the text
+	// surrounding the current selection/cursor, capped by the setting.
+	collectContextFor(editor: Editor): string {
+		const file: TFile | null = this.app.workspace.getActiveFile();
+		const sel = getEditorSelection(editor);
+		return collectNoteContext(
+			editor.getValue(),
+			{ title: file?.basename ?? "", path: file?.path ?? "" },
+			{
+				startOffset: editor.posToOffset(sel.from),
+				endOffset: editor.posToOffset(sel.to),
+			},
+			this.settings.contextChars
+		);
 	}
 
 	addActionsToMenu(menu: Menu, editor: Editor) {
@@ -360,6 +408,25 @@ export default class LlmTextAssistantPlugin extends Plugin {
 			onToken: (token) => applyStreamToken(handle, token),
 			onDone: () => {
 				this.hideProcessingNotice();
+				// Read the streamed result back out of the editor so the
+				// confirmation compares exactly what was written.
+				const resultText = editor.getRange(
+					handle.from,
+					editor.offsetToPos(handle.insertOffset)
+				);
+				// "Confirm result before replacing": the result has already
+				// been streamed into the note, so the diff modal either keeps
+				// it (Apply → undo toast) or restores the original text
+				// (Discard / Esc). Same contract as the extension's overlay.
+				if (this.settings.confirmBeforeReplace) {
+					const finalTo = editor.offsetToPos(handle.insertOffset);
+					new DiffConfirmModal(this.app, handle.originalText, resultText, {
+						onApply: () => showUndoToast(handle),
+						onDiscard: () =>
+							editor.replaceRange(handle.originalText, handle.from, finalTo),
+					}).open();
+					return;
+				}
 				showUndoToast(handle);
 			},
 			onError: (message) => {
@@ -396,12 +463,43 @@ export default class LlmTextAssistantPlugin extends Plugin {
 
 type PromptKey = "promptTranslate" | "promptExpand" | "promptSummarize" | "promptGrammar";
 
+// Id of the <datalist> that backs the model field's autocomplete.
+const MODEL_LIST_ID = "llmta-model-list";
+
 class LlmTextAssistantSettingTab extends PluginSettingTab {
 	plugin: LlmTextAssistantPlugin;
+	// <datalist> element of the model field (v1.1.0) — filled by loadModels().
+	private modelListEl: HTMLDataListElement | null = null;
 
 	constructor(app: App, plugin: LlmTextAssistantPlugin) {
 		super(app, plugin);
 		this.plugin = plugin;
+	}
+
+	// Fetch the endpoint's model list and offer it as autocomplete for the
+	// model field. Ported from the extension's options page.
+	private async loadModels(): Promise<void> {
+		const notice = new Notice(t("settingsModelsLoading"), 0);
+		try {
+			const models = await fetchModelList({
+				apiUrl: this.plugin.settings.apiUrl,
+				apiKey: this.plugin.settings.apiKey,
+			});
+			if (this.modelListEl) {
+				this.modelListEl.empty();
+				for (const model of models) {
+					this.modelListEl.createEl("option", { value: model });
+				}
+			}
+			notice.hide();
+			new Notice(t("settingsModelsLoaded", { COUNT: String(models.length) }));
+		} catch (err) {
+			notice.hide();
+			new Notice(
+				t("errorPrefix") + ((err as Error).message || t("errorGeneric")),
+				8000
+			);
+		}
 	}
 
 	// Declarative settings for Obsidian's settings search (1.13.0+).
@@ -510,6 +608,34 @@ class LlmTextAssistantSettingTab extends PluginSettingTab {
 					},
 				],
 			},
+			{
+				type: "group",
+				heading: t("settingsContextToggle"),
+				items: [
+					{
+						name: t("settingsContextToggle"),
+						desc: t("settingsContextDesc"),
+						control: { type: "toggle", key: "contextEnabled", defaultValue: false },
+					},
+					text("contextChars", t("settingsContextChars"), t("settingsContextCharsHint")),
+					{
+						name: t("settingsConfirmToggle"),
+						desc: t("settingsConfirmDesc"),
+						control: { type: "toggle", key: "confirmBeforeReplace", defaultValue: false },
+					},
+					{
+						name: t("settingsModelLoad"),
+						desc: german
+							? "Lädt die Modelle des Endpunkts (GET /models) als Vorschläge für das Modell-Feld."
+							: "Loads the endpoint's models (GET /models) as suggestions for the model field.",
+						render: (setting: Setting) => {
+							setting.addButton((btn) => {
+								btn.setButtonText(t("settingsModelLoad")).onClick(() => void this.loadModels());
+							});
+						},
+					},
+				],
+			},
 		];
 	}
 
@@ -540,13 +666,22 @@ class LlmTextAssistantSettingTab extends PluginSettingTab {
 		});
 
 		new Setting(containerEl).setName(t("settingsModel")).setDesc(
-			isGerman() ? "z. B. gpt-4, llama3.1, mistral" : "e.g. gpt-4, llama3.1, mistral"
+			isGerman()
+				? "z. B. gpt-4, llama3.1, mistral. „Modelle laden“ holt die Modelle des Endpunkts als Vorschläge."
+				: "e.g. gpt-4, llama3.1, mistral. \"Load models\" fetches the endpoint's models as suggestions."
 		).addText((text) => {
 			text.setValue(this.plugin.settings.model).onChange(async (value) => {
 				this.plugin.settings.model = value;
 				await this.plugin.saveSettings();
 			});
+			text.inputEl.setAttribute("list", MODEL_LIST_ID);
+		}).addButton((btn) => {
+			btn.setButtonText(t("settingsModelLoad")).onClick(() => void this.loadModels());
 		});
+
+		// Backs the model field's autocomplete (native <input list=…>).
+		this.modelListEl = containerEl.createEl("datalist");
+		this.modelListEl.id = MODEL_LIST_ID;
 
 		new Setting(containerEl).setName(t("settingsTemperature")).setDesc(
 			isGerman()
@@ -664,6 +799,9 @@ class LlmTextAssistantSettingTab extends PluginSettingTab {
 				removeBtn.addEventListener("click", () => {
 					this.plugin.settings.customActions.splice(idx, 1);
 					void this.plugin.saveSettings();
+					// Give newly created / re-indexed actions their commands
+					// (existing ids are skipped inside the plugin).
+					this.plugin.registerCustomActionCommands();
 					renderCustomActions();
 				});
 			});
@@ -676,6 +814,7 @@ class LlmTextAssistantSettingTab extends PluginSettingTab {
 			btn.setButtonText(isGerman() ? "＋ Neue Aktion hinzufügen" : "＋ Add new action").onClick(() => {
 				this.plugin.settings.customActions.push({ emoji: "⚡", title: "", prompt: "" });
 				void this.plugin.saveSettings();
+				this.plugin.registerCustomActionCommands();
 				renderCustomActions();
 			});
 		});
@@ -690,5 +829,31 @@ class LlmTextAssistantSettingTab extends PluginSettingTab {
 				await this.plugin.saveSettings();
 			});
 		});
+
+		// --- Note context for the free prompt (v1.1.0) ---
+		new Setting(containerEl).setName(t("settingsContextToggle")).setDesc(t("settingsContextDesc"))
+			.addToggle((toggle) => {
+				toggle.setValue(this.plugin.settings.contextEnabled).onChange(async (value) => {
+					this.plugin.settings.contextEnabled = value;
+					await this.plugin.saveSettings();
+				});
+			});
+
+		new Setting(containerEl).setName(t("settingsContextChars")).setDesc(t("settingsContextCharsHint"))
+			.addText((text) => {
+				text.setValue(this.plugin.settings.contextChars).onChange(async (value) => {
+					this.plugin.settings.contextChars = value;
+					await this.plugin.saveSettings();
+				});
+			});
+
+		// --- Replacement behaviour (v1.1.0) ---
+		new Setting(containerEl).setName(t("settingsConfirmToggle")).setDesc(t("settingsConfirmDesc"))
+			.addToggle((toggle) => {
+				toggle.setValue(this.plugin.settings.confirmBeforeReplace).onChange(async (value) => {
+					this.plugin.settings.confirmBeforeReplace = value;
+					await this.plugin.saveSettings();
+				});
+			});
 	}
 }

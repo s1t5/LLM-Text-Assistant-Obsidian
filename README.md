@@ -16,15 +16,16 @@ This is the **Obsidian edition** of LLM Text Assistant — the browser extension
 ### 📌 Core Features
 - **Four built-in actions**: 🌐 Translate, ✍️ Expand, 📋 Summarize, ✅ Grammar & Spelling, available via the editor context menu (right-click), the command palette, the ribbon icon ✨ and its action menu
 - **Custom actions**: Define your own actions with emoji, title and system prompt
-- **Free Prompt (Chat mode)**: Open a chat window with the current selection as context and give iterative instructions with full context; apply the result back into the note
+- **Free Prompt (Chat mode)**: Open a chat window with the current selection as context and give iterative instructions with full context; apply the result back into the note — with ready-made preset chips (Shorter / More formal / As email / Bullet list) and an optional **note context** (note title, vault path, surrounding text)
 - **Copy responses**: Hover any response for its ⧉ copy button, use "Copy last response", or press Ctrl/Cmd+C with nothing selected
 - **Streaming results (live typing)**: Text appears token by token as the model generates it, no waiting for the full response
 - **Selection or whole note**: Processes the selection — or the entire note when nothing is selected
+- **Review before replacing** (optional): Show an old→new diff and only write the result after you confirm
 
 ### ⌨️ UX
 - **Undo toast**: After every replacement a toast appears with an **Undo** button (8 seconds)
 - **Cancel requests**: Abort a running request by clicking the "Processing…" toast or the stop button in chat, already received text is kept
-- **Native Obsidian hotkeys**: Every action is a command — assign hotkeys via Obsidian's Hotkeys settings
+- **Native Obsidian hotkeys**: Every action — the four built-in ones, every custom action and the free prompt — is a command; assign hotkeys via Obsidian's Hotkeys settings
 - **Robust error handling**: Configurable timeout (default 60s), automatic retries on network errors and rate limits (429/5xx), clear error messages (e.g. "check your API key" on 401)
 
 ### 🔌 Provider Support
@@ -32,6 +33,7 @@ This is the **Obsidian edition** of LLM Text Assistant — the browser extension
   - **Cloud**: OpenAI, Mistral, Groq, Google Gemini (OpenAI-compat endpoint) and more
   - **Local**: Ollama, LM Studio, llama.cpp, vLLM; no API key required, data never leaves your machine
 - **Flexible configuration**: API URL, API key, model, temperature, timeout
+- **Model list from the endpoint**: "Load models" queries `GET <base>/models` and offers the available models as autocomplete for the model field
 - **Customizable system prompts** for every built-in action (e.g. `{TARGET_LANGUAGE}` placeholder for translation)
 
 ### 🌍 Internationalization
@@ -72,15 +74,18 @@ Open **Settings → LLM Text Assistant**:
 |---------|-------------|
 | **API URL** | Chat Completions endpoint, e.g. `https://api.openai.com/v1/chat/completions` |
 | **API Key** | Your API key (leave empty for local endpoints) |
-| **Model** | e.g. `gpt-4o-mini`, `llama3.1`, `mistral` |
+| **Model** | e.g. `gpt-4o-mini`, `llama3.1`, `mistral`. **Load models** fetches the endpoint's model list as autocomplete |
 | **Temperature** | Creativity (0–2, default: 0.3) |
 | **Timeout (seconds)** | Max wait time per attempt (default: 60). Retries twice on timeout. |
 | **Target language (Translate)** | Language to translate into (e.g. English, German, French) |
 | **System prompts** | Per-action instructions, e.g. `{TARGET_LANGUAGE}` placeholder for translation |
 | **Custom actions** | Your own actions with emoji, title and prompt |
 | **Free prompt** | Show/hide the 💬 Free prompt entry |
+| **Pass note context to the chat** | Also give the free prompt the note title, vault path and the surrounding text (default: off) |
+| **Max note-context characters** | Cap for the note context (`0` = off, default: 600) |
+| **Confirm result before replacing** | Show an old→new diff and only write the result after you confirm (default: off) |
 
-Hotkeys: every action appears in Obsidian's command palette — assign hotkeys under **Settings → Hotkeys**.
+Hotkeys: every action — built-in, custom and the free prompt — appears in Obsidian's command palette; assign hotkeys under **Settings → Hotkeys**.
 
 ### Local endpoint examples
 
@@ -101,6 +106,13 @@ Hotkeys: every action appears in Obsidian's command palette — assign hotkeys u
 ### 💬 Free Prompt (Chat mode)
 
 Open it via the context menu or the action menu. Your current selection is loaded as context — give instructions one after another, e.g. "Improve the text" or "Translate into English". **✓ Apply** writes the result into the editor, **⧉** copies it to the clipboard, **↺ Reset** restarts the chat with fresh context.
+
+- **Preset chips** (Shorter / More formal / As email / Bullet list) drop a ready-made instruction into the input field — they never send on their own
+- **Note context**: The "Note context" switch in the chat header adds the note title, its vault path and the surrounding text to every request. It starts from the setting *Pass note context to the chat* and can be toggled per chat session
+
+### ✅ Review before replacing
+
+With *Confirm result before replacing* enabled, every action shows a **Review changes** window after the result has streamed in: removed words are struck through in red, added words are highlighted in green. **Apply** keeps the result (the undo toast still works), **Discard** (or Esc) restores the original text — nothing is ever written without your confirmation.
 
 ## 🔒 Privacy & Security Notes
 

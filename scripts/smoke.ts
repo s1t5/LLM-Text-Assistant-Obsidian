@@ -27,7 +27,9 @@ register(pathToFileURL(path.join(process.cwd(), "scripts", "smoke-hook.mjs")).hr
 const { initI18n, t, isGerman } = await import("../src/i18n.ts");
 // Must be a dynamic import: static imports are resolved before register()
 // above runs, which would bypass the obsidian mock.
-const { LlmClient } = await import("../src/llm.ts");
+const { LlmClient, modelsUrlFromApiUrl, fetchModelList } = await import("../src/llm.ts");
+const { diffWords, isUnchanged } = await import("../src/diff.ts");
+const { collectNoteContext } = await import("../src/note-context.ts");
 
 let failures = 0;
 function assert(cond: boolean, label: string): void {
@@ -48,9 +50,18 @@ assert(
 	t("actionTranslate", { TARGET_LANGUAGE: "Englisch" }) === "🌐 Ins Englisch übersetzen",
 	"de: placeholder substitution"
 );
+assert(t("chatPresetShorter") === "Kürzer", "de: preset label (v1.1.0)");
 initI18n("en");
 assert(t("extensionName") === "LLM Text Assistant", "en: extensionName");
 assert(isGerman() === false, "en: isGerman()");
+assert(
+	t("settingsModelsLoaded", { COUNT: "3" }) === "3 models found",
+	"en: $COUNT$ substitution (v1.1.0)"
+);
+assert(
+	t("chatPresetPromptShorter").length > 0 && t("diffTitle") === "Review changes",
+	"en: v1.1.0 keys present"
+);
 
 // --- helpers ---
 
@@ -84,15 +95,25 @@ function makeCallbacks(): { cb: Collected; cbs: Record<string, (v: unknown) => v
 	};
 }
 
-// Installs a handler that receives (body) and returns a synthetic response:
-// { status, contentType, text } — mirroring requestUrl's buffered result.
+// Installs a handler that receives (body, callCount, meta) and returns a
+// synthetic response: { status, contentType, text } — mirroring requestUrl's
+// buffered result. `meta` carries url/method/headers for GET requests.
 // biome-ignore lint/suspicious/noExplicitAny: test scaffold
-function mockResponse(handler: (body: Record<string, unknown>, n: number) => any) {
+function mockResponse(
+	handler: (
+		body: Record<string, unknown>,
+		n: number,
+		meta: { url: string; method: string; headers: Record<string, string> }
+	) => any
+) {
 	let n = 0;
 	// biome-ignore lint/suspicious/noExplicitAny: test scaffold
-	(globalThis as any).__smokeHandler = (body: Record<string, unknown>) => {
+	(globalThis as any).__smokeHandler = (
+		body: Record<string, unknown>,
+		meta: { url: string; method: string; headers: Record<string, string> }
+	) => {
 		n++;
-		return handler(body, n);
+		return handler(body, n, meta);
 	};
 	return () => {
 		// biome-ignore lint/suspicious/noExplicitAny: test scaffold
@@ -186,6 +207,145 @@ console.log("[6] user abort → onAborted");
 	assert(cb.aborted === true, "onAborted fired");
 	assert(cb.fullText === null, "no text applied");
 	restore();
+}
+
+// --- 7. Model-list URL derivation ---
+console.log("[7] modelsUrlFromApiUrl");
+{
+	assert(
+		modelsUrlFromApiUrl("https://api.openai.com/v1/chat/completions") ===
+			"https://api.openai.com/v1/models",
+		"chat/completions → /models"
+	);
+	assert(
+		modelsUrlFromApiUrl("http://localhost:11434/v1/chat/completions") ===
+			"http://localhost:11434/v1/models",
+		"local endpoint"
+	);
+	assert(
+		modelsUrlFromApiUrl("https://api.example.com/v1/chat/completions/") ===
+			"https://api.example.com/v1/models",
+		"trailing slash"
+	);
+	assert(
+		modelsUrlFromApiUrl("https://api.example.com/v1/completions") ===
+			"https://api.example.com/v1/models",
+		"completions → /models"
+	);
+	assert(
+		modelsUrlFromApiUrl("https://api.example.com/v1/") === "https://api.example.com/v1/models",
+		"other path keeps its base"
+	);
+	assert(modelsUrlFromApiUrl("") === "", "empty URL → empty");
+}
+
+// --- 8. fetchModelList ---
+console.log("[8] fetchModelList");
+{
+	let seenUrl = "";
+	let seenMethod = "";
+	const restore = mockResponse((_body, _n, meta) => {
+		seenUrl = meta.url;
+		seenMethod = meta.method;
+		return {
+			status: 200,
+			contentType: "application/json",
+			text: JSON.stringify({
+				data: [{ id: "gpt-4o" }, { id: "llama3.1" }, { id: "gpt-4o" }],
+			}),
+		};
+	});
+	const models = await fetchModelList({
+		apiUrl: "https://api.example.com/v1/chat/completions",
+		apiKey: "test-key",
+	});
+	assert(seenUrl === "https://api.example.com/v1/models", `GET url derived: ${seenUrl}`);
+	assert(seenMethod === "GET", "GET method used");
+	assert(models.join(",") === "gpt-4o,llama3.1", `sorted + de-duplicated: ${models.join(",")}`);
+	restore();
+}
+{
+	const restore = mockResponse(() => ({
+		status: 200,
+		contentType: "application/json",
+		text: JSON.stringify({ models: [{ name: "m2" }, "m1"] }),
+	}));
+	const models = await fetchModelList({ apiUrl: "https://api.example.com/v1", apiKey: "" });
+	assert(models.join(",") === "m1,m2", `{models:[…]} / string entries: ${models.join(",")}`);
+	restore();
+}
+{
+	const restore = mockResponse(() => ({ status: 500, contentType: "application/json", text: "{}" }));
+	let message = "";
+	try {
+		await fetchModelList({ apiUrl: "https://api.example.com/v1", apiKey: "" });
+	} catch (err) {
+		message = (err as Error).message;
+	}
+	assert(/500/.test(message), `HTTP error surfaced: ${message}`);
+	restore();
+}
+{
+	let message = "";
+	try {
+		await fetchModelList({ apiUrl: "   ", apiKey: "" });
+	} catch (err) {
+		message = (err as Error).message;
+	}
+	assert(message === t("settingsModelsNeedUrl"), `missing URL rejected: ${message}`);
+}
+
+// --- 9. diffWords ---
+console.log("[9] diffWords");
+{
+	assert(isUnchanged(diffWords("Hallo Welt", "Hallo Welt")), "identical text → unchanged");
+	assert(
+		diffWords("Hallo Welt", "Hallo du Welt").some(
+			(segment) => segment.type === "ins" && segment.text.includes("du")
+		),
+		"insertion detected"
+	);
+	const segments = diffWords("Zeile eins\nZeile zwei", "Zeile eins\nZeile 2");
+	assert(
+		segments
+			.filter((segment) => segment.type !== "ins")
+			.map((segment) => segment.text)
+			.join("") === "Zeile eins\nZeile zwei",
+		"kept + removed segments reconstruct the old text"
+	);
+	assert(
+		segments
+			.filter((segment) => segment.type !== "del")
+			.map((segment) => segment.text)
+			.join("") === "Zeile eins\nZeile 2",
+		"kept + inserted segments reconstruct the new text"
+	);
+	const oversized = "w ".repeat(1300).trim();
+	const fallback = diffWords(oversized, `${oversized} extra`);
+	assert(
+		fallback.length === 2 && fallback[0].type === "del" && fallback[1].type === "ins",
+		"oversized input falls back to del + ins"
+	);
+}
+
+// --- 10. collectNoteContext ---
+console.log("[10] collectNoteContext");
+{
+	const content = "Zeile1\nZeile2\nZiel\nZeile4\nZeile5";
+	const start = content.indexOf("Ziel");
+	const meta = { title: "Notiz", path: "Ordner/Notiz.md" };
+	const selection = { startOffset: start, endOffset: start + 4 };
+
+	const context = collectNoteContext(content, meta, selection, "600");
+	assert(context.startsWith("TITLE: Notiz\nPATH: Ordner/Notiz.md\n"), "head carries title + path");
+	assert(context.includes("Zeile2") && context.includes("Zeile4"), "surroundings included");
+	assert(context.length <= 600, "respects the cap");
+	assert(collectNoteContext(content, meta, selection, "0") === "", "0 = off");
+	assert(collectNoteContext(content, meta, selection, "") === "", "empty cap = off");
+	const small = collectNoteContext(content, meta, selection, "30");
+	assert(small.length <= 30, `small cap honoured (${small.length})`);
+	const noMeta = collectNoteContext(content, { title: "", path: "" }, selection, "600");
+	assert(!noMeta.startsWith("\n") && noMeta.includes("Zeile2"), "no title/path → body only");
 }
 
 // --- summary ---
