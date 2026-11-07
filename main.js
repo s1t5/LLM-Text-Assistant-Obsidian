@@ -1393,6 +1393,9 @@ var LlmTextAssistantSettingTab = class extends import_obsidian5.PluginSettingTab
     super(app, plugin);
     // <datalist> element of the model field (v1.1.0) — filled by loadModels().
     this.modelListEl = null;
+    // Last fetched model list. Kept so a re-render of the settings tab (every
+    // update() rebuilds the rows) does not silently drop the suggestions.
+    this.modelsCache = [];
     this.plugin = plugin;
   }
   // Fetch the endpoint's model list and offer it as autocomplete for the
@@ -1404,6 +1407,7 @@ var LlmTextAssistantSettingTab = class extends import_obsidian5.PluginSettingTab
         apiUrl: this.plugin.settings.apiUrl,
         apiKey: this.plugin.settings.apiKey
       });
+      this.modelsCache = models;
       if (this.modelListEl) {
         this.modelListEl.empty();
         for (const model of models) {
@@ -1420,6 +1424,111 @@ var LlmTextAssistantSettingTab = class extends import_obsidian5.PluginSettingTab
       );
     }
   }
+  // --- Shared row builders (declarative + imperative path) ---
+  // Obsidian 1.13+ renders the tab from getSettingDefinitions() and SKIPS
+  // display() entirely, so every control has to exist in both paths. These
+  // builders are the single implementation both call, so they cannot drift.
+  // The localized default for a prompt key. The settings model stores these
+  // keys empty on purpose (so the defaults stay locale-aware).
+  promptFallback(key) {
+    switch (key) {
+      case "promptTranslate":
+        return t("defaultPromptTranslate", { TARGET_LANGUAGE: "{TARGET_LANGUAGE}" });
+      case "promptExpand":
+        return t("defaultPromptExpand");
+      case "promptSummarize":
+        return t("defaultPromptSummarize");
+      case "promptGrammar":
+        return t("defaultPromptGrammar");
+    }
+  }
+  // Shows the EFFECTIVE prompt: stored value, else the localized default.
+  // A declarative `control` binding cannot do this — its defaultValue only
+  // applies to undefined/null, and these keys are stored as "" — so the
+  // textarea is built by hand in both paths.
+  addPromptControl(setting, key) {
+    setting.addTextArea((text) => {
+      text.setValue(this.plugin.settings[key] || this.promptFallback(key)).onChange(async (value) => {
+        this.plugin.settings[key] = value;
+        await this.plugin.saveSettings();
+      });
+      text.inputEl.rows = 4;
+      text.inputEl.addClass("llmta-settings-textarea");
+    });
+  }
+  addModelControl(setting) {
+    setting.addText((text) => {
+      text.setValue(this.plugin.settings.model).onChange(async (value) => {
+        this.plugin.settings.model = value;
+        await this.plugin.saveSettings();
+      });
+      text.inputEl.setAttribute("list", MODEL_LIST_ID);
+    }).addButton((btn) => {
+      btn.setButtonText(t("settingsModelLoad")).onClick(() => void this.loadModels());
+    });
+    const datalist = setting.settingEl.createEl("datalist");
+    datalist.id = MODEL_LIST_ID;
+    this.modelListEl = datalist;
+    for (const model of this.modelsCache) {
+      datalist.createEl("option", { value: model });
+    }
+  }
+  // Full custom-action editor (list + add button). Shared by display() and the
+  // declarative render callback — the declarative path used to show only a
+  // description, so actions could not be created at all on Obsidian 1.13+.
+  renderCustomActionsEditor(containerEl) {
+    const listEl = containerEl.createDiv({ cls: "llmta-custom-actions" });
+    const renderList = () => {
+      listEl.empty();
+      this.plugin.settings.customActions.forEach((action, idx) => {
+        const wrapper = listEl.createDiv({ cls: "llmta-custom-action" });
+        const row = wrapper.createDiv({ cls: "llmta-custom-action-row" });
+        const emojiInput = row.createEl("input", { type: "text", cls: "llmta-emoji-input" });
+        emojiInput.value = action.emoji || "\u26A1";
+        const titleInput = row.createEl("input", {
+          type: "text",
+          placeholder: isGerman() ? "Aktionstitel" : "Action title"
+        });
+        titleInput.value = action.title || "";
+        const promptArea = wrapper.createEl("textarea", {
+          cls: "llmta-prompt-textarea"
+        });
+        promptArea.placeholder = isGerman() ? "System-Prompt f\xFCr diese Aktion..." : "System prompt for this action...";
+        promptArea.rows = 2;
+        promptArea.value = action.prompt || "";
+        const removeBtn = row.createEl("button", {
+          text: isGerman() ? "\u{1F5D1} Entfernen" : "\u{1F5D1} Remove",
+          cls: "llmta-remove-btn"
+        });
+        const update = () => {
+          this.plugin.settings.customActions[idx] = {
+            emoji: emojiInput.value,
+            title: titleInput.value,
+            prompt: promptArea.value
+          };
+          void this.plugin.saveSettings();
+        };
+        emojiInput.addEventListener("change", update);
+        titleInput.addEventListener("change", update);
+        promptArea.addEventListener("change", update);
+        removeBtn.addEventListener("click", () => {
+          this.plugin.settings.customActions.splice(idx, 1);
+          void this.plugin.saveSettings();
+          this.plugin.registerCustomActionCommands();
+          renderList();
+        });
+      });
+    };
+    renderList();
+    new import_obsidian5.Setting(containerEl).addButton((btn) => {
+      btn.setButtonText(isGerman() ? "\uFF0B Neue Aktion hinzuf\xFCgen" : "\uFF0B Add new action").onClick(() => {
+        this.plugin.settings.customActions.push({ emoji: "\u26A1", title: "", prompt: "" });
+        void this.plugin.saveSettings();
+        this.plugin.registerCustomActionCommands();
+        renderList();
+      });
+    });
+  }
   // Declarative settings for Obsidian's settings search (1.13.0+).
   // Mirrors the imperative display() tab; the fallback rendering below stays
   // authoritative for users on older app versions.
@@ -1434,14 +1543,11 @@ var LlmTextAssistantSettingTab = class extends import_obsidian5.PluginSettingTab
         control: { type: "text", key, defaultValue: String((_a = s[key]) != null ? _a : ""), placeholder }
       };
     };
-    const textArea = (key, name, desc) => {
-      var _a;
-      return {
-        name,
-        desc,
-        control: { type: "textarea", key, defaultValue: String((_a = s[key]) != null ? _a : "") }
-      };
-    };
+    const promptItem = (key, name, desc) => ({
+      name,
+      desc,
+      render: (setting) => this.addPromptControl(setting, key)
+    });
     return [
       {
         type: "group",
@@ -1459,12 +1565,13 @@ var LlmTextAssistantSettingTab = class extends import_obsidian5.PluginSettingTab
             german ? "Bei lokalen Endpunkten leer lassen" : "Leave empty for local endpoints",
             "sk-..."
           ),
-          text(
-            "model",
-            t("settingsModel"),
-            german ? "z. B. gpt-4, llama3.1, mistral" : "e.g. gpt-4, llama3.1, mistral",
-            "gpt-3.5-turbo"
-          ),
+          {
+            name: t("settingsModel"),
+            desc: german ? "z. B. gpt-4, llama3.1, mistral. \u201EModelle laden\u201C holt die Modelle des Endpunkts als Vorschl\xE4ge." : `e.g. gpt-4, llama3.1, mistral. "Load models" fetches the endpoint's models as suggestions.`,
+            // Rendered by hand: the field needs the <datalist> target and
+            // the "load models" button, which a text control cannot attach.
+            render: (setting) => this.addModelControl(setting)
+          },
           text(
             "temperature",
             t("settingsTemperature"),
@@ -1489,22 +1596,22 @@ var LlmTextAssistantSettingTab = class extends import_obsidian5.PluginSettingTab
         type: "group",
         heading: t("settingsPrompts"),
         items: [
-          textArea(
+          promptItem(
             "promptTranslate",
             t("actionTranslate", { TARGET_LANGUAGE: s.targetLanguage || t("defaultTargetLanguage") }),
             german ? "Platzhalter {TARGET_LANGUAGE} wird zur Laufzeit durch die Zielsprache ersetzt. Feld leeren = Standard-Prompt." : "The {TARGET_LANGUAGE} placeholder is replaced with the target language at runtime. Empty field = default prompt."
           ),
-          textArea(
+          promptItem(
             "promptExpand",
             t("actionExpand"),
             german ? "Feld leeren = Standard-Prompt." : "Empty field = default prompt."
           ),
-          textArea(
+          promptItem(
             "promptSummarize",
             t("actionSummarize"),
             german ? "Feld leeren = Standard-Prompt." : "Empty field = default prompt."
           ),
-          textArea(
+          promptItem(
             "promptGrammar",
             t("actionGrammar"),
             german ? "Feld leeren = Standard-Prompt." : "Empty field = default prompt."
@@ -1518,10 +1625,11 @@ var LlmTextAssistantSettingTab = class extends import_obsidian5.PluginSettingTab
           {
             name: t("settingsCustomActions"),
             desc: german ? "Definiere eigene Aktionen mit Emoji, Titel und Prompt. Diese erscheinen im Men\xFC und im Kontextmen\xFC des Editors." : "Define your own actions with emoji, title and prompt. They appear in the menu and the editor context menu.",
+            // The editor is imperative (a list of multi-field rows), so it
+            // has to be rendered here too — display() does not run on 1.13+.
             render: (setting) => {
-              setting.setDesc(
-                german ? "Verwalte die eigenen Aktionen auf der Plugin-Einstellungsseite." : "Manage custom actions on the plugin settings page."
-              );
+              setting.settingEl.addClass("llmta-custom-actions-row");
+              this.renderCustomActionsEditor(setting.settingEl);
             }
           }
         ]
@@ -1585,19 +1693,10 @@ var LlmTextAssistantSettingTab = class extends import_obsidian5.PluginSettingTab
         await this.plugin.saveSettings();
       });
     });
-    new import_obsidian5.Setting(containerEl).setName(t("settingsModel")).setDesc(
+    const modelSetting = new import_obsidian5.Setting(containerEl).setName(t("settingsModel")).setDesc(
       isGerman() ? "z. B. gpt-4, llama3.1, mistral. \u201EModelle laden\u201C holt die Modelle des Endpunkts als Vorschl\xE4ge." : `e.g. gpt-4, llama3.1, mistral. "Load models" fetches the endpoint's models as suggestions.`
-    ).addText((text) => {
-      text.setValue(this.plugin.settings.model).onChange(async (value) => {
-        this.plugin.settings.model = value;
-        await this.plugin.saveSettings();
-      });
-      text.inputEl.setAttribute("list", MODEL_LIST_ID);
-    }).addButton((btn) => {
-      btn.setButtonText(t("settingsModelLoad")).onClick(() => void this.loadModels());
-    });
-    this.modelListEl = containerEl.createEl("datalist");
-    this.modelListEl.id = MODEL_LIST_ID;
+    );
+    this.addModelControl(modelSetting);
     new import_obsidian5.Setting(containerEl).setName(t("settingsTemperature")).setDesc(
       isGerman() ? "0 = deterministisch, 2 = sehr kreativ (Standard: 0.3)" : "0 = deterministic, 2 = very creative (default: 0.3)"
     ).addText((text) => {
@@ -1626,84 +1725,26 @@ var LlmTextAssistantSettingTab = class extends import_obsidian5.PluginSettingTab
     const promptFields = [
       {
         key: "promptTranslate",
-        name: t("actionTranslate", { TARGET_LANGUAGE: this.plugin.settings.targetLanguage || t("defaultTargetLanguage") }),
-        fallback: t("defaultPromptTranslate", { TARGET_LANGUAGE: "{TARGET_LANGUAGE}" })
+        name: t("actionTranslate", { TARGET_LANGUAGE: this.plugin.settings.targetLanguage || t("defaultTargetLanguage") })
       },
-      { key: "promptExpand", name: t("actionExpand"), fallback: t("defaultPromptExpand") },
-      { key: "promptSummarize", name: t("actionSummarize"), fallback: t("defaultPromptSummarize") },
-      { key: "promptGrammar", name: t("actionGrammar"), fallback: t("defaultPromptGrammar") }
+      { key: "promptExpand", name: t("actionExpand") },
+      { key: "promptSummarize", name: t("actionSummarize") },
+      { key: "promptGrammar", name: t("actionGrammar") }
     ];
-    for (const { key, name, fallback } of promptFields) {
+    for (const { key, name } of promptFields) {
       const setting = new import_obsidian5.Setting(containerEl).setName(name);
       if (key === "promptTranslate") {
         setting.setDesc(
           isGerman() ? "Platzhalter {TARGET_LANGUAGE} wird zur Laufzeit durch die Zielsprache ersetzt. Feld leeren = Standard-Prompt." : "The {TARGET_LANGUAGE} placeholder is replaced with the target language at runtime. Empty field = default prompt."
         );
       }
-      setting.addTextArea((text) => {
-        text.setValue(this.plugin.settings[key] || fallback).onChange(async (value) => {
-          this.plugin.settings[key] = value;
-          await this.plugin.saveSettings();
-        });
-        text.inputEl.rows = 4;
-        text.inputEl.addClass("llmta-settings-textarea");
-      });
+      this.addPromptControl(setting, key);
     }
     new import_obsidian5.Setting(containerEl).setName(t("settingsCustomActions")).setHeading();
     new import_obsidian5.Setting(containerEl).setDesc(
       isGerman() ? "Definiere eigene Aktionen mit Emoji, Titel und Prompt. Diese erscheinen im Men\xFC und im Kontextmen\xFC des Editors." : "Define your own actions with emoji, title and prompt. They appear in the menu and the editor context menu."
     );
-    const renderCustomActions = () => {
-      listEl.empty();
-      this.plugin.settings.customActions.forEach((action, idx) => {
-        const wrapper = listEl.createDiv({ cls: "llmta-custom-action" });
-        const row = wrapper.createDiv({ cls: "llmta-custom-action-row" });
-        const emojiInput = row.createEl("input", { type: "text", cls: "llmta-emoji-input" });
-        emojiInput.value = action.emoji || "\u26A1";
-        const titleInput = row.createEl("input", {
-          type: "text",
-          placeholder: isGerman() ? "Aktionstitel" : "Action title"
-        });
-        titleInput.value = action.title || "";
-        const promptArea = wrapper.createEl("textarea", {
-          cls: "llmta-prompt-textarea"
-        });
-        promptArea.placeholder = isGerman() ? "System-Prompt f\xFCr diese Aktion..." : "System prompt for this action...";
-        promptArea.rows = 2;
-        promptArea.value = action.prompt || "";
-        const removeBtn = row.createEl("button", {
-          text: isGerman() ? "\u{1F5D1} Entfernen" : "\u{1F5D1} Remove",
-          cls: "llmta-remove-btn"
-        });
-        const update = () => {
-          this.plugin.settings.customActions[idx] = {
-            emoji: emojiInput.value,
-            title: titleInput.value,
-            prompt: promptArea.value
-          };
-          void this.plugin.saveSettings();
-        };
-        emojiInput.addEventListener("change", update);
-        titleInput.addEventListener("change", update);
-        promptArea.addEventListener("change", update);
-        removeBtn.addEventListener("click", () => {
-          this.plugin.settings.customActions.splice(idx, 1);
-          void this.plugin.saveSettings();
-          this.plugin.registerCustomActionCommands();
-          renderCustomActions();
-        });
-      });
-    };
-    const listEl = containerEl.createDiv();
-    renderCustomActions();
-    new import_obsidian5.Setting(containerEl).addButton((btn) => {
-      btn.setButtonText(isGerman() ? "\uFF0B Neue Aktion hinzuf\xFCgen" : "\uFF0B Add new action").onClick(() => {
-        this.plugin.settings.customActions.push({ emoji: "\u26A1", title: "", prompt: "" });
-        void this.plugin.saveSettings();
-        this.plugin.registerCustomActionCommands();
-        renderCustomActions();
-      });
-    });
+    this.renderCustomActionsEditor(containerEl);
     new import_obsidian5.Setting(containerEl).setName(t("settingsFreePrompt")).setHeading();
     new import_obsidian5.Setting(containerEl).setName(
       isGerman() ? "Freien Prompt im Men\xFC anzeigen" : "Show free prompt in the menu"

@@ -470,6 +470,9 @@ class LlmTextAssistantSettingTab extends PluginSettingTab {
 	plugin: LlmTextAssistantPlugin;
 	// <datalist> element of the model field (v1.1.0) — filled by loadModels().
 	private modelListEl: HTMLDataListElement | null = null;
+	// Last fetched model list. Kept so a re-render of the settings tab (every
+	// update() rebuilds the rows) does not silently drop the suggestions.
+	private modelsCache: string[] = [];
 
 	constructor(app: App, plugin: LlmTextAssistantPlugin) {
 		super(app, plugin);
@@ -485,6 +488,7 @@ class LlmTextAssistantSettingTab extends PluginSettingTab {
 				apiUrl: this.plugin.settings.apiUrl,
 				apiKey: this.plugin.settings.apiKey,
 			});
+			this.modelsCache = models;
 			if (this.modelListEl) {
 				this.modelListEl.empty();
 				for (const model of models) {
@@ -500,6 +504,130 @@ class LlmTextAssistantSettingTab extends PluginSettingTab {
 				8000
 			);
 		}
+	}
+
+	// --- Shared row builders (declarative + imperative path) ---
+	// Obsidian 1.13+ renders the tab from getSettingDefinitions() and SKIPS
+	// display() entirely, so every control has to exist in both paths. These
+	// builders are the single implementation both call, so they cannot drift.
+
+	// The localized default for a prompt key. The settings model stores these
+	// keys empty on purpose (so the defaults stay locale-aware).
+	private promptFallback(key: PromptKey): string {
+		switch (key) {
+			case "promptTranslate":
+				return t("defaultPromptTranslate", { TARGET_LANGUAGE: "{TARGET_LANGUAGE}" });
+			case "promptExpand":
+				return t("defaultPromptExpand");
+			case "promptSummarize":
+				return t("defaultPromptSummarize");
+			case "promptGrammar":
+				return t("defaultPromptGrammar");
+		}
+	}
+
+	// Shows the EFFECTIVE prompt: stored value, else the localized default.
+	// A declarative `control` binding cannot do this — its defaultValue only
+	// applies to undefined/null, and these keys are stored as "" — so the
+	// textarea is built by hand in both paths.
+	private addPromptControl(setting: Setting, key: PromptKey): void {
+		setting.addTextArea((text) => {
+			text.setValue(this.plugin.settings[key] || this.promptFallback(key)).onChange(async (value) => {
+				this.plugin.settings[key] = value;
+				await this.plugin.saveSettings();
+			});
+			text.inputEl.rows = 4;
+			text.inputEl.addClass("llmta-settings-textarea");
+		});
+	}
+
+	private addModelControl(setting: Setting): void {
+		setting
+			.addText((text) => {
+				text.setValue(this.plugin.settings.model).onChange(async (value) => {
+					this.plugin.settings.model = value;
+					await this.plugin.saveSettings();
+				});
+				text.inputEl.setAttribute("list", MODEL_LIST_ID);
+			})
+			.addButton((btn) => {
+				btn.setButtonText(t("settingsModelLoad")).onClick(() => void this.loadModels());
+			});
+		// Backs the field's autocomplete (native <input list=…>). It has to be
+		// created here, not in display(), or the declarative path has no target
+		// for loadModels() and the suggestions never appear.
+		const datalist = setting.settingEl.createEl("datalist");
+		datalist.id = MODEL_LIST_ID;
+		this.modelListEl = datalist;
+		for (const model of this.modelsCache) {
+			datalist.createEl("option", { value: model });
+		}
+	}
+
+	// Full custom-action editor (list + add button). Shared by display() and the
+	// declarative render callback — the declarative path used to show only a
+	// description, so actions could not be created at all on Obsidian 1.13+.
+	private renderCustomActionsEditor(containerEl: HTMLElement): void {
+		const listEl = containerEl.createDiv({ cls: "llmta-custom-actions" });
+
+		const renderList = () => {
+			listEl.empty();
+			this.plugin.settings.customActions.forEach((action: CustomAction, idx: number) => {
+				const wrapper = listEl.createDiv({ cls: "llmta-custom-action" });
+				const row = wrapper.createDiv({ cls: "llmta-custom-action-row" });
+				const emojiInput = row.createEl("input", { type: "text", cls: "llmta-emoji-input" });
+				emojiInput.value = action.emoji || "⚡";
+				const titleInput = row.createEl("input", {
+					type: "text",
+					placeholder: isGerman() ? "Aktionstitel" : "Action title",
+				});
+				titleInput.value = action.title || "";
+
+				const promptArea = wrapper.createEl("textarea", {
+					cls: "llmta-prompt-textarea",
+				});
+				promptArea.placeholder = isGerman()
+					? "System-Prompt für diese Aktion..."
+					: "System prompt for this action...";
+				promptArea.rows = 2;
+				promptArea.value = action.prompt || "";
+
+				const removeBtn = row.createEl("button", {
+					text: isGerman() ? "🗑 Entfernen" : "🗑 Remove",
+					cls: "llmta-remove-btn",
+				});
+
+				const update = () => {
+					this.plugin.settings.customActions[idx] = {
+						emoji: emojiInput.value,
+						title: titleInput.value,
+						prompt: promptArea.value,
+					};
+					void this.plugin.saveSettings();
+				};
+				emojiInput.addEventListener("change", update);
+				titleInput.addEventListener("change", update);
+				promptArea.addEventListener("change", update);
+				removeBtn.addEventListener("click", () => {
+					this.plugin.settings.customActions.splice(idx, 1);
+					void this.plugin.saveSettings();
+					// Give newly created / re-indexed actions their commands
+					// (existing ids are skipped inside the plugin).
+					this.plugin.registerCustomActionCommands();
+					renderList();
+				});
+			});
+		};
+		renderList();
+
+		new Setting(containerEl).addButton((btn) => {
+			btn.setButtonText(isGerman() ? "＋ Neue Aktion hinzufügen" : "＋ Add new action").onClick(() => {
+				this.plugin.settings.customActions.push({ emoji: "⚡", title: "", prompt: "" });
+				void this.plugin.saveSettings();
+				this.plugin.registerCustomActionCommands();
+				renderList();
+			});
+		});
 	}
 
 	// Declarative settings for Obsidian's settings search (1.13.0+).
@@ -518,14 +646,10 @@ class LlmTextAssistantSettingTab extends PluginSettingTab {
 			desc,
 			control: { type: "text", key, defaultValue: String(s[key] ?? ""), placeholder },
 		});
-		const textArea = (
-			key: keyof LlmTextAssistantSettings,
-			name: string,
-			desc: string
-		): SettingGroupItem => ({
+		const promptItem = (key: PromptKey, name: string, desc: string): SettingGroupItem => ({
 			name,
 			desc,
-			control: { type: "textarea", key, defaultValue: String(s[key] ?? "") },
+			render: (setting: Setting) => this.addPromptControl(setting, key),
 		});
 
 		return [
@@ -541,9 +665,15 @@ class LlmTextAssistantSettingTab extends PluginSettingTab {
 					text("apiKey", t("settingsApiKey"),
 						german ? "Bei lokalen Endpunkten leer lassen" : "Leave empty for local endpoints",
 						"sk-..."),
-					text("model", t("settingsModel"),
-						german ? "z. B. gpt-4, llama3.1, mistral" : "e.g. gpt-4, llama3.1, mistral",
-						"gpt-3.5-turbo"),
+					{
+						name: t("settingsModel"),
+						desc: german
+							? "z. B. gpt-4, llama3.1, mistral. „Modelle laden“ holt die Modelle des Endpunkts als Vorschläge."
+							: "e.g. gpt-4, llama3.1, mistral. \"Load models\" fetches the endpoint's models as suggestions.",
+						// Rendered by hand: the field needs the <datalist> target and
+						// the "load models" button, which a text control cannot attach.
+						render: (setting: Setting) => this.addModelControl(setting),
+					},
 					text("temperature", t("settingsTemperature"),
 						german
 							? "0 = deterministisch, 2 = sehr kreativ (Standard: 0.3)"
@@ -565,15 +695,15 @@ class LlmTextAssistantSettingTab extends PluginSettingTab {
 				type: "group",
 				heading: t("settingsPrompts"),
 				items: [
-					textArea("promptTranslate", t("actionTranslate", { TARGET_LANGUAGE: s.targetLanguage || t("defaultTargetLanguage") }),
+					promptItem("promptTranslate", t("actionTranslate", { TARGET_LANGUAGE: s.targetLanguage || t("defaultTargetLanguage") }),
 						german
 							? "Platzhalter {TARGET_LANGUAGE} wird zur Laufzeit durch die Zielsprache ersetzt. Feld leeren = Standard-Prompt."
 							: "The {TARGET_LANGUAGE} placeholder is replaced with the target language at runtime. Empty field = default prompt."),
-					textArea("promptExpand", t("actionExpand"),
+					promptItem("promptExpand", t("actionExpand"),
 						german ? "Feld leeren = Standard-Prompt." : "Empty field = default prompt."),
-					textArea("promptSummarize", t("actionSummarize"),
+					promptItem("promptSummarize", t("actionSummarize"),
 						german ? "Feld leeren = Standard-Prompt." : "Empty field = default prompt."),
-					textArea("promptGrammar", t("actionGrammar"),
+					promptItem("promptGrammar", t("actionGrammar"),
 						german ? "Feld leeren = Standard-Prompt." : "Empty field = default prompt."),
 				],
 			},
@@ -586,13 +716,11 @@ class LlmTextAssistantSettingTab extends PluginSettingTab {
 						desc: german
 							? "Definiere eigene Aktionen mit Emoji, Titel und Prompt. Diese erscheinen im Menü und im Kontextmenü des Editors."
 							: "Define your own actions with emoji, title and prompt. They appear in the menu and the editor context menu.",
+						// The editor is imperative (a list of multi-field rows), so it
+						// has to be rendered here too — display() does not run on 1.13+.
 						render: (setting: Setting) => {
-							// Custom actions are managed with dedicated UI in display()
-							setting.setDesc(
-								german
-									? "Verwalte die eigenen Aktionen auf der Plugin-Einstellungsseite."
-									: "Manage custom actions on the plugin settings page."
-							);
+							setting.settingEl.addClass("llmta-custom-actions-row");
+							this.renderCustomActionsEditor(setting.settingEl);
 						},
 					},
 				],
@@ -665,23 +793,12 @@ class LlmTextAssistantSettingTab extends PluginSettingTab {
 			});
 		});
 
-		new Setting(containerEl).setName(t("settingsModel")).setDesc(
+		const modelSetting = new Setting(containerEl).setName(t("settingsModel")).setDesc(
 			isGerman()
 				? "z. B. gpt-4, llama3.1, mistral. „Modelle laden“ holt die Modelle des Endpunkts als Vorschläge."
 				: "e.g. gpt-4, llama3.1, mistral. \"Load models\" fetches the endpoint's models as suggestions."
-		).addText((text) => {
-			text.setValue(this.plugin.settings.model).onChange(async (value) => {
-				this.plugin.settings.model = value;
-				await this.plugin.saveSettings();
-			});
-			text.inputEl.setAttribute("list", MODEL_LIST_ID);
-		}).addButton((btn) => {
-			btn.setButtonText(t("settingsModelLoad")).onClick(() => void this.loadModels());
-		});
-
-		// Backs the model field's autocomplete (native <input list=…>).
-		this.modelListEl = containerEl.createEl("datalist");
-		this.modelListEl.id = MODEL_LIST_ID;
+		);
+		this.addModelControl(modelSetting);
 
 		new Setting(containerEl).setName(t("settingsTemperature")).setDesc(
 			isGerman()
@@ -721,17 +838,16 @@ class LlmTextAssistantSettingTab extends PluginSettingTab {
 		// The settings model keeps the prompt fields empty by default so the
 		// localized defaults stay locale-aware. The UI therefore shows the
 		// effective prompt: the stored value, or the localized default.
-		const promptFields: Array<{ key: PromptKey; name: string; fallback: string }> = [
+		const promptFields: Array<{ key: PromptKey; name: string }> = [
 			{
 				key: "promptTranslate",
 				name: t("actionTranslate", { TARGET_LANGUAGE: this.plugin.settings.targetLanguage || t("defaultTargetLanguage") }),
-				fallback: t("defaultPromptTranslate", { TARGET_LANGUAGE: "{TARGET_LANGUAGE}" }),
 			},
-			{ key: "promptExpand", name: t("actionExpand"), fallback: t("defaultPromptExpand") },
-			{ key: "promptSummarize", name: t("actionSummarize"), fallback: t("defaultPromptSummarize") },
-			{ key: "promptGrammar", name: t("actionGrammar"), fallback: t("defaultPromptGrammar") },
+			{ key: "promptExpand", name: t("actionExpand") },
+			{ key: "promptSummarize", name: t("actionSummarize") },
+			{ key: "promptGrammar", name: t("actionGrammar") },
 		];
-		for (const { key, name, fallback } of promptFields) {
+		for (const { key, name } of promptFields) {
 			const setting = new Setting(containerEl).setName(name);
 			if (key === "promptTranslate") {
 				setting.setDesc(
@@ -740,14 +856,7 @@ class LlmTextAssistantSettingTab extends PluginSettingTab {
 						: "The {TARGET_LANGUAGE} placeholder is replaced with the target language at runtime. Empty field = default prompt."
 				);
 			}
-			setting.addTextArea((text) => {
-				text.setValue(this.plugin.settings[key] || fallback).onChange(async (value) => {
-					this.plugin.settings[key] = value;
-					await this.plugin.saveSettings();
-				});
-				text.inputEl.rows = 4;
-				text.inputEl.addClass("llmta-settings-textarea");
-			});
+			this.addPromptControl(setting, key);
 		}
 
 		// --- Custom actions ---
@@ -757,67 +866,7 @@ class LlmTextAssistantSettingTab extends PluginSettingTab {
 				? "Definiere eigene Aktionen mit Emoji, Titel und Prompt. Diese erscheinen im Menü und im Kontextmenü des Editors."
 				: "Define your own actions with emoji, title and prompt. They appear in the menu and the editor context menu."
 		);
-
-		const renderCustomActions = () => {
-			listEl.empty();
-			this.plugin.settings.customActions.forEach((action: CustomAction, idx: number) => {
-				const wrapper = listEl.createDiv({ cls: "llmta-custom-action" });
-				const row = wrapper.createDiv({ cls: "llmta-custom-action-row" });
-				const emojiInput = row.createEl("input", { type: "text", cls: "llmta-emoji-input" });
-				emojiInput.value = action.emoji || "⚡";
-				const titleInput = row.createEl("input", {
-					type: "text",
-					placeholder: isGerman() ? "Aktionstitel" : "Action title",
-				});
-				titleInput.value = action.title || "";
-
-				const promptArea = wrapper.createEl("textarea", {
-					cls: "llmta-prompt-textarea",
-				});
-				promptArea.placeholder = isGerman()
-					? "System-Prompt für diese Aktion..."
-					: "System prompt for this action...";
-				promptArea.rows = 2;
-				promptArea.value = action.prompt || "";
-
-				const removeBtn = row.createEl("button", {
-					text: isGerman() ? "🗑 Entfernen" : "🗑 Remove",
-					cls: "llmta-remove-btn",
-				});
-
-				const update = () => {
-					this.plugin.settings.customActions[idx] = {
-						emoji: emojiInput.value,
-						title: titleInput.value,
-						prompt: promptArea.value,
-					};
-					void this.plugin.saveSettings();
-				};
-				emojiInput.addEventListener("change", update);
-				titleInput.addEventListener("change", update);
-				promptArea.addEventListener("change", update);
-				removeBtn.addEventListener("click", () => {
-					this.plugin.settings.customActions.splice(idx, 1);
-					void this.plugin.saveSettings();
-					// Give newly created / re-indexed actions their commands
-					// (existing ids are skipped inside the plugin).
-					this.plugin.registerCustomActionCommands();
-					renderCustomActions();
-				});
-			});
-		};
-
-		const listEl = containerEl.createDiv();
-		renderCustomActions();
-
-		new Setting(containerEl).addButton((btn) => {
-			btn.setButtonText(isGerman() ? "＋ Neue Aktion hinzufügen" : "＋ Add new action").onClick(() => {
-				this.plugin.settings.customActions.push({ emoji: "⚡", title: "", prompt: "" });
-				void this.plugin.saveSettings();
-				this.plugin.registerCustomActionCommands();
-				renderCustomActions();
-			});
-		});
+		this.renderCustomActionsEditor(containerEl);
 
 		// --- Free prompt ---
 		new Setting(containerEl).setName(t("settingsFreePrompt")).setHeading();

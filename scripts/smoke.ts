@@ -9,6 +9,7 @@
 import { register } from "node:module";
 import { pathToFileURL } from "node:url";
 import path from "node:path";
+import fs from "node:fs";
 
 register(pathToFileURL(path.join(process.cwd(), "scripts", "smoke-hook.mjs")).href);
 
@@ -346,6 +347,51 @@ console.log("[10] collectNoteContext");
 	assert(small.length <= 30, `small cap honoured (${small.length})`);
 	const noMeta = collectNoteContext(content, { title: "", path: "" }, selection, "600");
 	assert(!noMeta.startsWith("\n") && noMeta.includes("Zeile2"), "no title/path → body only");
+}
+
+// --- 11. Settings tab: effective defaults + declarative coverage ---
+// Regression guard for the Obsidian 1.13+ settings tab. On 1.13+ Obsidian
+// renders from getSettingDefinitions() and SKIPS display(), so anything only
+// built in display() disappears: the custom-action editor (no way to add
+// actions) and the prompt textareas (a `control` binding shows the STORED
+// value, which is "" by design, so every field looked empty).
+console.log("[11] settings tab (declarative path)");
+{
+	for (const lang of ["de", "en"] as const) {
+		initI18n(lang);
+		for (const key of ["defaultPromptTranslate", "defaultPromptExpand", "defaultPromptSummarize", "defaultPromptGrammar"] as const) {
+			assert(t(key).trim().length > 0, `${lang}: ${key} is non-empty`);
+		}
+		assert(
+			t("defaultPromptTranslate", { TARGET_LANGUAGE: "{TARGET_LANGUAGE}" }).includes("{TARGET_LANGUAGE}"),
+			`${lang}: translate default keeps the {TARGET_LANGUAGE} placeholder`
+		);
+	}
+	initI18n("de");
+
+	const mainSrc = fs.readFileSync(path.join(process.cwd(), "src", "main.ts"), "utf8");
+	const defsStart = mainSrc.indexOf("getSettingDefinitions()");
+	const displayStart = mainSrc.indexOf("\tdisplay(): void {");
+	assert(defsStart > 0 && displayStart > defsStart, "getSettingDefinitions() precedes display()");
+	const defs = mainSrc.slice(defsStart, displayStart);
+
+	// Prompts must be rendered by hand (effective default), not bound as controls.
+	assert(!/type:\s*"textarea"/.test(defs), "no bare textarea control in the declarative path");
+	for (const key of ["promptTranslate", "promptExpand", "promptSummarize", "promptGrammar"]) {
+		assert(
+			new RegExp(`promptItem\\("${key}"`).test(defs) || defs.includes(`addPromptControl(setting, "${key}")`),
+			`declarative path renders ${key}`
+		);
+	}
+	assert(defs.includes("this.addPromptControl("), "prompts go through addPromptControl()");
+	assert(defs.includes("this.renderCustomActionsEditor("), "custom-action editor is rendered declaratively");
+	assert(defs.includes("this.addModelControl("), "model field (datalist + button) is rendered declaratively");
+	// Both paths must use the same builders, otherwise they drift again.
+	const displaySrc = mainSrc.slice(displayStart);
+	assert(displaySrc.includes("this.addPromptControl("), "display() uses addPromptControl()");
+	assert(displaySrc.includes("this.renderCustomActionsEditor("), "display() uses renderCustomActionsEditor()");
+	assert(displaySrc.includes("this.addModelControl("), "display() uses addModelControl()");
+	assert(!displaySrc.includes("renderCustomActions ="), "display() no longer carries a private copy of the editor");
 }
 
 // --- summary ---

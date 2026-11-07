@@ -138,6 +138,17 @@
 }
 
 /* --- Settings: custom actions --- */
+/* Declarative render row (Obsidian 1.13+): stack name/desc above the editor
+   instead of the default two-column setting-item layout. */
+.llmta-custom-actions-row {
+	flex-direction: column;
+	align-items: stretch;
+}
+
+.llmta-custom-actions-row .setting-item-info {
+	width: 100%;
+}
+
 .llmta-custom-action {
 	border: 1px solid var(--background-modifier-border);
 	border-radius: 8px;
