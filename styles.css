@@ -216,15 +216,15 @@
 }
 
 .llmta-diff-del {
-	background: var(--background-modifier-error);
-	color: var(--text-error);
+	background: rgba(var(--color-red-rgb), 0.16);
+	color: var(--text-normal);
 	text-decoration: line-through;
 	border-radius: 2px;
 }
 
 .llmta-diff-ins {
-	background: var(--background-modifier-success);
-	color: var(--text-success);
+	background: rgba(var(--color-green-rgb), 0.16);
+	color: var(--text-normal);
 	border-radius: 2px;
 }
 
