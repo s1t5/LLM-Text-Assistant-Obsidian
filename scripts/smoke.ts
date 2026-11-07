@@ -386,11 +386,13 @@ console.log("[11] settings tab (declarative path)");
 	assert(defs.includes("this.addPromptControl("), "prompts go through addPromptControl()");
 	assert(defs.includes("this.renderCustomActionsEditor("), "custom-action editor is rendered declaratively");
 	assert(defs.includes("this.addModelControl("), "model field (datalist + button) is rendered declaratively");
+	assert(defs.includes("this.addTargetLanguageControl("), "target language shows the effective value");
 	// Both paths must use the same builders, otherwise they drift again.
 	const displaySrc = mainSrc.slice(displayStart);
 	assert(displaySrc.includes("this.addPromptControl("), "display() uses addPromptControl()");
 	assert(displaySrc.includes("this.renderCustomActionsEditor("), "display() uses renderCustomActionsEditor()");
 	assert(displaySrc.includes("this.addModelControl("), "display() uses addModelControl()");
+	assert(displaySrc.includes("this.addTargetLanguageControl("), "display() uses addTargetLanguageControl()");
 	assert(!displaySrc.includes("renderCustomActions ="), "display() no longer carries a private copy of the editor");
 }
 

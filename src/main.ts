@@ -541,6 +541,15 @@ class LlmTextAssistantSettingTab extends PluginSettingTab {
 		});
 	}
 
+	private addTargetLanguageControl(setting: Setting): void {
+		setting.addText((text) => {
+			text.setValue(this.plugin.settings.targetLanguage || t("defaultTargetLanguage")).onChange(async (value) => {
+				this.plugin.settings.targetLanguage = value;
+				await this.plugin.saveSettings();
+			});
+		});
+	}
+
 	private addModelControl(setting: Setting): void {
 		setting
 			.addText((text) => {
@@ -684,11 +693,15 @@ class LlmTextAssistantSettingTab extends PluginSettingTab {
 							? "Maximale Wartezeit pro Anfrage (Standard: 60)"
 							: "Maximum wait time per request (default: 60)",
 						"60"),
-					text("targetLanguage", t("settingsTargetLanguage"),
-						german
+					{
+						name: t("settingsTargetLanguage"),
+						desc: german
 							? "Sprache, in die übersetzt wird, z. B. Englisch, Deutsch, Französisch"
 							: "Language to translate into, e.g. English, German, French",
-						t("defaultTargetLanguage")),
+						// Same effective-value rule as the prompts: the key is stored
+						// empty until the user edits it, so a control would render blank.
+						render: (setting: Setting) => this.addTargetLanguageControl(setting),
+					},
 				],
 			},
 			{
@@ -822,17 +835,12 @@ class LlmTextAssistantSettingTab extends PluginSettingTab {
 			});
 		});
 
-		new Setting(containerEl).setName(t("settingsTargetLanguage")).setDesc(
+		const targetLanguageSetting = new Setting(containerEl).setName(t("settingsTargetLanguage")).setDesc(
 			isGerman()
 				? "Sprache, in die übersetzt wird, z. B. Englisch, Deutsch, Französisch"
 				: "Language to translate into, e.g. English, German, French"
-		).addText((text) => {
-			text.setValue(this.plugin.settings.targetLanguage || t("defaultTargetLanguage")).onChange(async (value) => {
-				this.plugin.settings.targetLanguage = value;
-				await this.plugin.saveSettings();
-			});
-		});
-
+		);
+		this.addTargetLanguageControl(targetLanguageSetting);
 		// --- System prompts ---
 		new Setting(containerEl).setName(t("settingsPrompts")).setHeading();
 		// The settings model keeps the prompt fields empty by default so the

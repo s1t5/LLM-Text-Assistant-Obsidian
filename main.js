@@ -1456,6 +1456,14 @@ var LlmTextAssistantSettingTab = class extends import_obsidian5.PluginSettingTab
       text.inputEl.addClass("llmta-settings-textarea");
     });
   }
+  addTargetLanguageControl(setting) {
+    setting.addText((text) => {
+      text.setValue(this.plugin.settings.targetLanguage || t("defaultTargetLanguage")).onChange(async (value) => {
+        this.plugin.settings.targetLanguage = value;
+        await this.plugin.saveSettings();
+      });
+    });
+  }
   addModelControl(setting) {
     setting.addText((text) => {
       text.setValue(this.plugin.settings.model).onChange(async (value) => {
@@ -1584,12 +1592,13 @@ var LlmTextAssistantSettingTab = class extends import_obsidian5.PluginSettingTab
             german ? "Maximale Wartezeit pro Anfrage (Standard: 60)" : "Maximum wait time per request (default: 60)",
             "60"
           ),
-          text(
-            "targetLanguage",
-            t("settingsTargetLanguage"),
-            german ? "Sprache, in die \xFCbersetzt wird, z. B. Englisch, Deutsch, Franz\xF6sisch" : "Language to translate into, e.g. English, German, French",
-            t("defaultTargetLanguage")
-          )
+          {
+            name: t("settingsTargetLanguage"),
+            desc: german ? "Sprache, in die \xFCbersetzt wird, z. B. Englisch, Deutsch, Franz\xF6sisch" : "Language to translate into, e.g. English, German, French",
+            // Same effective-value rule as the prompts: the key is stored
+            // empty until the user edits it, so a control would render blank.
+            render: (setting) => this.addTargetLanguageControl(setting)
+          }
         ]
       },
       {
@@ -1713,14 +1722,10 @@ var LlmTextAssistantSettingTab = class extends import_obsidian5.PluginSettingTab
         await this.plugin.saveSettings();
       });
     });
-    new import_obsidian5.Setting(containerEl).setName(t("settingsTargetLanguage")).setDesc(
+    const targetLanguageSetting = new import_obsidian5.Setting(containerEl).setName(t("settingsTargetLanguage")).setDesc(
       isGerman() ? "Sprache, in die \xFCbersetzt wird, z. B. Englisch, Deutsch, Franz\xF6sisch" : "Language to translate into, e.g. English, German, French"
-    ).addText((text) => {
-      text.setValue(this.plugin.settings.targetLanguage || t("defaultTargetLanguage")).onChange(async (value) => {
-        this.plugin.settings.targetLanguage = value;
-        await this.plugin.saveSettings();
-      });
-    });
+    );
+    this.addTargetLanguageControl(targetLanguageSetting);
     new import_obsidian5.Setting(containerEl).setName(t("settingsPrompts")).setHeading();
     const promptFields = [
       {

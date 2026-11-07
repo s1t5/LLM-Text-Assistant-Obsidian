@@ -147,6 +147,7 @@ class FakeSetting {
 
 // --- fake i18n: the real German defaults, so the assertions read naturally --
 const DE = {
+	defaultTargetLanguage: "Englisch",
 	defaultPromptTranslate: "Du bist ein Übersetzungs-Werkzeug. Übersetze den Text ins $TARGET_LANGUAGE$.",
 	defaultPromptExpand: "Du bist ein Text-Werkzeug.",
 	defaultPromptSummarize: "Du bist ein Zusammenfassungs-Werkzeug.",
@@ -161,7 +162,7 @@ const isGerman = () => true;
 const MODEL_LIST_ID = "llmta-model-list";
 
 // --- build the class under test from the shipped sources --------------------
-const methods = ["promptFallback", "addPromptControl", "addModelControl", "renderCustomActionsEditor"]
+const methods = ["promptFallback", "addPromptControl", "addTargetLanguageControl", "addModelControl", "renderCustomActionsEditor"]
 	.map((n) => sliceMethod(n).replace(/^\tprivate /, "\t").replace(/^\t/, ""))
 	.join("\n");
 const classSrc = stripTypeScriptTypes(`class Tab {\n${methods}\n}`, { mode: "strip" });
@@ -214,6 +215,13 @@ console.log("[settings tab] prompt fields");
 	tab.addPromptControl(s2, "promptExpand");
 	const ta2 = s2.settingEl.find((e) => e.tagName === "TEXTAREA")[0];
 	check("stored prompt wins over the default", ta2.value === "Mein Prompt", ta2.value);
+
+	console.log("[settings tab] target language");
+	tab.plugin.settings.targetLanguage = "";
+	const s4 = new FakeSetting(new El("div"));
+	tab.addTargetLanguageControl(s4);
+	const langInput = s4.settingEl.find((e) => e.tagName === "INPUT")[0];
+	check("empty stored language shows the localized default", langInput.value === "Englisch", langInput.value);
 
 	console.log("[settings tab] model field");
 	tab.modelsCache = ["llama3", "gpt-4o"];

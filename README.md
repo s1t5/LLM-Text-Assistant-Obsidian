@@ -114,13 +114,13 @@ Open it via the context menu or the action menu. Your current selection is loade
 
 With *Confirm result before replacing* enabled, every action shows a **Review changes** window after the result has streamed in: removed words are struck through in red, added words are highlighted in green. **Apply** keeps the result (the undo toast still works), **Discard** (or Esc) restores the original text — nothing is ever written without your confirmation.
 
-## 🆕 v1.1.1 — fix: custom actions and system prompts were missing in the settings tab
+## 🆕 v1.1.1 / v1.1.2 — fix: custom actions and system prompts were missing in the settings tab
 
 **Symptom:** On Obsidian 1.13+ the plugin settings showed empty system-prompt fields and no way to create custom actions at all.
 
 **Cause:** Obsidian 1.13 introduced declarative settings. As soon as a plugin implements `getSettingDefinitions()`, Obsidian renders the tab from those definitions and **never calls `display()`**. This plugin had both, but only `display()` built the custom-action editor and only `display()` filled the prompt textareas with the *effective* prompt (stored value, else the localized default). The declarative definitions bound the prompt fields as plain `textarea` controls, which display the **stored** value — and those keys are stored as `""` on purpose, so every field rendered empty. The same gap hid the model-field `<datalist>`, so "Load models" had nothing to fill.
 
-**Fix:** the prompt fields, the model field and the custom-action editor are now built by shared methods (`addPromptControl`, `addModelControl`, `renderCustomActionsEditor`) that both `getSettingDefinitions()` and `display()` call, so the two paths cannot drift. The prompt textareas show the effective prompt again, clearing one restores the localized default, and custom actions can be added, edited and removed on 1.13+ as before.
+**Fix:** the prompt fields, the model field and the custom-action editor are now built by shared methods (`addPromptControl`, `addTargetLanguageControl`, `addModelControl`, `renderCustomActionsEditor`) that both `getSettingDefinitions()` and `display()` call, so the two paths cannot drift. The prompt textareas show the effective prompt again, clearing one restores the localized default, and custom actions can be added, edited and removed on 1.13+ as before. The target-language field had the same defect and now shows the effective language too (v1.1.2).
 
 Tests: `npm run smoke` (section 11 asserts the declarative path wires all three builders) and `npm run test:settings` (value-level: an empty stored prompt renders the localized default, the datalist is wired, actions can be added and removed).
 
